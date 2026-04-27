@@ -46,6 +46,19 @@ Route::middleware('auth:sanctum')->group(function () {
     // Admin: Customer Management
     Route::apiResource('customers', CustomerController::class);
     Route::post('customers/{id}/pay-manual', [CustomerController::class, 'payManual']);
+
+    // Admin: Dashboard Stats
+    Route::get('/dashboard/stats', [\App\Http\Controllers\Api\DashboardController::class, 'index']);
+    Route::get('/dashboard/transactions', [\App\Http\Controllers\Api\DashboardController::class, 'transactions']);
+    Route::post('/dashboard/refresh-mikrotik', [\App\Http\Controllers\Api\DashboardController::class, 'refreshMikrotik']);
+
+    // Admin: Network Center (OLT/ONU)
+    Route::get('/network/olts', [\App\Http\Controllers\Api\NetworkCenterController::class, 'index']);
+    Route::post('/network/olts', [\App\Http\Controllers\Api\NetworkCenterController::class, 'storeOlt']);
+    Route::get('/network/olts/{id}/nodes', [\App\Http\Controllers\Api\NetworkCenterController::class, 'nodes']);
+    Route::post('/network/olts/{id}/sync', [\App\Http\Controllers\Api\NetworkCenterController::class, 'sync']);
+    Route::put('/network/nodes/{id}', [\App\Http\Controllers\Api\NetworkCenterController::class, 'updateNode']);
+    Route::post('/network/nodes/{id}/reboot', [\App\Http\Controllers\Api\NetworkCenterController::class, 'reboot']);
 });
 
 // Public Customer Bill Lookup

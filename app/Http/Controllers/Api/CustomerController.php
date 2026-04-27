@@ -20,9 +20,19 @@ class CustomerController extends Controller
         $this->whatsapp = $whatsapp;
     }
 
-    public function index()
+    public function index(Request $request)
     {
-        $customers = Customer::paginate(10);
+        $query = Customer::query();
+
+        if ($request->has('q')) {
+            $q = $request->input('q');
+            $query->where(function($sub) use ($q) {
+                $sub->where('name', 'like', "%{$q}%")
+                    ->orWhere('whatsapp', 'like', "%{$q}%");
+            });
+        }
+
+        $customers = $query->latest()->paginate(10);
         
         $customers->getCollection()->transform(function ($customer) {
             // Check sync status with Mikrotik (limited to paginated results)
