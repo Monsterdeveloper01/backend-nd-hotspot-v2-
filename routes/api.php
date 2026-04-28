@@ -72,11 +72,6 @@ Route::get('/maintenance/status', [\App\Http\Controllers\Api\SystemConfigControl
 Route::post('/maintenance/bypass', [\App\Http\Controllers\Api\SystemConfigController::class, 'verifyBypass']);
 Route::post('/log-visit', [\App\Http\Controllers\Api\AnalyticsController::class, 'logVisit']);
 
-// Public Speedtest Endpoints
-Route::get('/speedtest/ping', [\App\Http\Controllers\Api\SpeedTestController::class, 'ping']);
-Route::get('/speedtest/download', [\App\Http\Controllers\Api\SpeedTestController::class, 'download']);
-Route::post('/speedtest/upload', [\App\Http\Controllers\Api\SpeedTestController::class, 'upload']);
-
 // Public Customer Bill Lookup
 Route::get('/search-bill', [\App\Http\Controllers\Api\CustomerController::class, 'searchBill']);
 Route::get('/check-voucher', [VoucherController::class, 'checkVoucher']);

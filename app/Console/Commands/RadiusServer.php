@@ -8,6 +8,7 @@ use App\Models\RadiusClient;
 use App\Models\RadiusLog;
 use App\Services\RadiusServerAdapter;
 use Carbon\Carbon;
+use Illuminate\Support\Facades\DB;
 
 class RadiusServer extends Command
 {
@@ -16,9 +17,15 @@ class RadiusServer extends Command
 
     private $socket;
     private $clients = [];
+    private $lastClientRefresh = 0;
 
     public function handle()
     {
+        if (function_exists('pcntl_signal')) {
+            pcntl_signal(SIGTERM, [$this, 'shutdown']);
+            pcntl_signal(SIGINT, [$this, 'shutdown']);
+        }
+
         $port = $this->option('port');
         $this->info("ND-Hotspot RADIUS Server starting on port $port...");
 
@@ -39,27 +46,39 @@ class RadiusServer extends Command
         $this->logEvent(null, '0.0.0.0', 'Info', 'Success', "Server started on port $port");
 
         while (true) {
+            if (function_exists('pcntl_signal_dispatch')) {
+                pcntl_signal_dispatch();
+            }
+
             $from = '';
             $fromPort = 0;
             $data = '';
             
-            socket_recvfrom($this->socket, $data, 1024, 0, $from, $fromPort);
-
-            if ($data) {
+            if (@socket_recvfrom($this->socket, $data, 1024, 0, $from, $fromPort)) {
                 $this->handlePacket($data, $from, $fromPort);
             }
         }
     }
 
+    public function shutdown()
+    {
+        $this->info("Shutting down RADIUS server...");
+        if ($this->socket) {
+            socket_close($this->socket);
+        }
+        exit(0);
+    }
+
     private function loadClients()
     {
         $this->clients = RadiusClient::all()->pluck('shared_secret', 'ip_address')->toArray();
+        $this->lastClientRefresh = time();
     }
 
     private function handlePacket($data, $from, $fromPort)
     {
-        // Jika IP tidak ada di cache, coba refresh data dari database
-        if (!isset($this->clients[$from])) {
+        // 5. loadClients() Refresh Logic (Cooldown/Cache)
+        if (time() - $this->lastClientRefresh > 60 || !isset($this->clients[$from])) {
             $this->loadClients();
         }
 
@@ -72,20 +91,18 @@ class RadiusServer extends Command
         $secret = $this->clients[$from];
         $radius = new RadiusServerAdapter();
         
-        // Extract authenticator first for PAP password decryption
-        $authenticator = substr($data, 4, 16);
-
         $packet = $radius->decodePacket($data, $secret);
         
         if (!$packet) {
-            $this->error("Failed to decode packet from $from");
-            $this->logEvent(null, $from, 'Auth', 'Fail', "Invalid packet or secret mismatch");
+            $this->error("Failed to decode packet from $from (Invalid length or checksum)");
+            $this->logEvent(null, $from, 'Auth', 'Fail', "Invalid packet from $from");
             return;
         }
 
         $code = $packet['code'];
         $identifier = $packet['identifier'];
         $attributes = $packet['attributes'];
+        $authenticator = $packet['authenticator'];
 
         switch ($code) {
             case RadiusServerAdapter::TYPE_ACCESS_REQUEST:
@@ -101,6 +118,7 @@ class RadiusServer extends Command
     private function handleAccessRequest($id, $attrs, $from, $port, $secret, $authenticator)
     {
         $username = $attrs[1] ?? null; // 1 = User-Name
+        $password = $attrs[2] ?? null; // 2 = User-Password (already decrypted by decodePacket)
 
         if (!$username) {
             $this->sendReject($id, $from, $port, $secret, $authenticator, "Missing User-Name");
@@ -108,49 +126,91 @@ class RadiusServer extends Command
             return;
         }
 
-        $voucher = Voucher::where('code', $username)->with('plan')->first();
+        DB::beginTransaction();
+        try {
+            $voucher = Voucher::where('code', $username)->with('plan')->lockForUpdate()->first();
 
-        if (!$voucher) {
-            $this->sendReject($id, $from, $port, $secret, $authenticator, "Voucher not found");
-            $this->logEvent($username, $from, 'Login', 'Fail', "Voucher code not found in database");
-            return;
+            if (!$voucher) {
+                DB::rollBack();
+                $this->sendReject($id, $from, $port, $secret, $authenticator, "Voucher not found");
+                $this->logEvent($username, $from, 'Login', 'Fail', "Voucher code not found: $username");
+                return;
+            }
+
+            // Password verification
+            if ($password !== $voucher->code && $password !== '1') {
+                // Heuristic: If password fails, maybe our secret was old? 
+                if (time() - $this->lastClientRefresh > 2) {
+                    $this->loadClients();
+                    $secret = $this->clients[$from] ?? $secret;
+                    $radius = new RadiusServerAdapter();
+                    $newPassword = $radius->decryptPapPassword($attrs[2] ?? '', $secret, $authenticator);
+                    if ($newPassword === $voucher->code || $newPassword === '1') {
+                        $password = $newPassword;
+                    }
+                }
+            }
+
+            if ($password !== $voucher->code && $password !== '1') {
+                DB::rollBack();
+                $this->sendReject($id, $from, $port, $secret, $authenticator, "Wrong password");
+                $this->logEvent($username, $from, 'Login', 'Fail', "Invalid password attempt for: $username");
+                return;
+            }
+
+            if ($voucher->status === 'used') {
+                if ($voucher->expires_at && Carbon::now()->gt($voucher->expires_at)) {
+                    DB::rollBack();
+                    $this->sendReject($id, $from, $port, $secret, $authenticator, "Voucher expired");
+                    $this->logEvent($username, $from, 'Login', 'Fail', "Voucher expired: $username");
+                    return;
+                }
+
+                // MAC Address Binding
+                $incomingMac = $attrs[31] ?? null; // 31 = Calling-Station-Id
+                if ($voucher->mac_address && $incomingMac && $voucher->mac_address !== $incomingMac) {
+                    DB::rollBack();
+                    $this->sendReject($id, $from, $port, $secret, $authenticator, "Voucher bound to another device");
+                    $this->logEvent($username, $from, 'Login', 'Fail', "MAC Mismatch: Expected {$voucher->mac_address}, got $incomingMac");
+                    return;
+                }
+            } elseif ($voucher->status === 'available') {
+                $durationStr = $voucher->plan->duration;
+                $expiresAt = $this->calculateExpiry($durationStr);
+                
+                $voucher->update([
+                    'status' => 'used',
+                    'used_at' => now(),
+                    'expires_at' => $expiresAt,
+                    'mac_address' => $attrs[31] ?? null
+                ]);
+            } else {
+                DB::rollBack();
+                $this->sendReject($id, $from, $port, $secret, $authenticator, "Voucher not available");
+                $this->logEvent($username, $from, 'Login', 'Fail', "Voucher status invalid: {$voucher->status}");
+                return;
+            }
+
+            DB::commit();
+            $this->logEvent($username, $from, 'Login', 'Success', "Authentication successful");
+            $this->sendAccept($id, $from, $port, $secret, $authenticator, $voucher);
+        } catch (\Exception $e) {
+            DB::rollBack();
+            $this->error("Error: " . $e->getMessage());
+            $this->sendReject($id, $from, $port, $secret, $authenticator, "System Error");
         }
-
-        if ($voucher->status === 'used' && $voucher->expires_at && Carbon::now()->gt($voucher->expires_at)) {
-            $this->sendReject($id, $from, $port, $secret, $authenticator, "Voucher expired");
-            $this->logEvent($username, $from, 'Login', 'Fail', "Voucher has already expired");
-            return;
-        }
-
-        if ($voucher->status === 'available') {
-            $durationStr = $voucher->plan->duration;
-            $expiresAt = $this->calculateExpiry($durationStr);
-            
-            $voucher->update([
-                'status' => 'used',
-                'used_at' => now(),
-                'expires_at' => $expiresAt,
-                'mac_address' => $attrs[31] ?? null // 31 = Calling-Station-Id
-            ]);
-            $this->logEvent($username, $from, 'Login', 'Success', "First login detected. Expiry set to $expiresAt");
-        } else {
-            $this->logEvent($username, $from, 'Login', 'Success', "Subsequent login accepted");
-        }
-
-        $this->sendAccept($id, $from, $port, $secret, $authenticator, $voucher);
     }
 
     private function sendAccept($id, $ip, $port, $secret, $requestAuthenticator, $voucher)
     {
         $radius = new RadiusServerAdapter();
         $responseAttrs = [
-            27 => $this->getRemainingSeconds($voucher->expires_at), // 27 = Session-Timeout
-            28 => 300, // 28 = Idle-Timeout
+            27 => $this->getRemainingSeconds($voucher->expires_at),
+            28 => 300,
         ];
 
         if ($voucher->plan) {
-            $rateLimit = ($voucher->plan->upload_limit ?: '0') . '/' . ($voucher->plan->download_limit ?: '0');
-            // MikroTik Vendor-Specific Attribute for Rate-Limit
+            $rateLimit = ($voucher->plan->upload_limit ?: '0') . 'k/' . ($voucher->plan->download_limit ?: '0') . 'k';
             $responseAttrs['Vendor-Specific'] = [149 => [8 => $rateLimit]];
         }
 
@@ -161,7 +221,9 @@ class RadiusServer extends Command
     private function sendReject($id, $ip, $port, $secret, $requestAuthenticator, $reason = "")
     {
         $radius = new RadiusServerAdapter();
-        $packet = $radius->encodePacket(RadiusServerAdapter::TYPE_ACCESS_REJECT, $id, $secret, $requestAuthenticator, []);
+        $packet = $radius->encodePacket(RadiusServerAdapter::TYPE_ACCESS_REJECT, $id, $secret, $requestAuthenticator, [
+            18 => $reason
+        ]);
         socket_sendto($this->socket, $packet, strlen($packet), 0, $ip, $port);
     }
 
@@ -175,7 +237,7 @@ class RadiusServer extends Command
         if ($statusType == 2) $typeStr = 'Stop';
         if ($statusType == 3) $typeStr = 'Interim';
 
-        $this->logEvent($username, $ip, $typeStr, 'Info', "Accounting packet received");
+        $this->logEvent($username, $ip, $typeStr, 'Info', "Packet received");
 
         $radius = new RadiusServerAdapter();
         $packet = $radius->encodePacket(RadiusServerAdapter::TYPE_ACCOUNTING_RESPONSE, $id, $secret, $requestAuthenticator, []);

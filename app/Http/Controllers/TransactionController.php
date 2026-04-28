@@ -120,27 +120,36 @@ class TransactionController extends Controller
             if ($transaction->status !== 'success') {
                 $transaction->status = 'success';
 
-                // Assign a voucher from stock
+                // Assign a voucher from stock or generate one if empty
                 $voucher = Voucher::where('voucher_plan_id', $transaction->voucher_plan_id)
                                  ->where('status', 'available')
                                  ->first();
 
-                if ($voucher) {
+                if (!$voucher) {
+                    // Generate new voucher on the fly if stock is empty
+                    $voucher = Voucher::create([
+                        'voucher_plan_id' => $transaction->voucher_plan_id,
+                        'code' => Str::upper(Str::random(8)),
+                        'status' => 'sold',
+                        'customer_phone' => $transaction->customer_phone
+                    ]);
+                } else {
                     $voucher->status = 'sold';
                     $voucher->customer_phone = $transaction->customer_phone;
                     $voucher->save();
-                    $transaction->voucher_id = $voucher->id;
-                    
-                    // Send WA
-                    $msg = "Terima kasih! Pembayaran Anda berhasil.\n\n" .
-                           "Detail Voucher ND-HOTSPOT:\n" .
-                           "Kode: *{$voucher->code}*\n" .
-                           "Paket: {$transaction->plan->name}\n" .
-                           "Durasi: {$transaction->plan->duration}\n\n" .
-                           "Silakan hubungkan ke WiFi ND-HOTSPOT dan masukkan kode di atas. Selamat internetan!";
-                    
-                    $this->wa->sendMessage($transaction->customer_phone, $msg);
                 }
+
+                $transaction->voucher_id = $voucher->id;
+                
+                // Send WA
+                $msg = "Terima kasih! Pembayaran Anda berhasil.\n\n" .
+                       "Detail Voucher ND-HOTSPOT:\n" .
+                       "Kode: *{$voucher->code}*\n" .
+                       "Paket: {$transaction->plan->name}\n" .
+                       "Durasi: {$transaction->plan->duration}\n\n" .
+                       "Silakan hubungkan ke WiFi ND-HOTSPOT dan masukkan kode di atas. Selamat internetan!";
+                
+                $this->wa->sendMessage($transaction->customer_phone, $msg);
                 
                 $transaction->save();
             }

@@ -14,8 +14,11 @@ class SystemConfigController extends Controller
     public function getStatus()
     {
         $mode = AppConfig::where('key', 'maintenance_mode')->first();
+        $sessionId = AppConfig::where('key', 'maintenance_session_id')->first();
+        
         return response()->json([
-            'maintenance_mode' => $mode ? $mode->value === '1' : false
+            'maintenance_mode' => $mode ? $mode->value === '1' : false,
+            'session_id' => $sessionId ? $sessionId->value : null
         ]);
     }
 
@@ -32,6 +35,14 @@ class SystemConfigController extends Controller
             ['key' => 'maintenance_mode'],
             ['value' => $request->active ? '1' : '0']
         );
+
+        // If turning ON, generate a new session ID to invalidate old bypasses
+        if ($request->active) {
+            AppConfig::updateOrCreate(
+                ['key' => 'maintenance_session_id'],
+                ['value' => bin2hex(random_bytes(16))]
+            );
+        }
 
         return response()->json([
             'success' => true,
@@ -50,9 +61,10 @@ class SystemConfigController extends Controller
         ]);
 
         if ($request->password === 'karambia1686') {
+            $sessionId = AppConfig::where('key', 'maintenance_session_id')->first();
             return response()->json([
                 'success' => true,
-                'token' => 'karambia1686' // Returning the token to be stored in frontend
+                'token' => $sessionId ? $sessionId->value : 'bypass'
             ]);
         }
 

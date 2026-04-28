@@ -32,10 +32,12 @@ class CheckMaintenanceMode
                 if ($request->is($path)) return $next($request);
             }
 
-            // 3. Check for bypass token (karambia1686)
+            // 3. Check for bypass token
             $bypassToken = $request->header('X-Maintenance-Bypass') ?: $request->cookie('maintenance_bypass');
+            $currentSession = AppConfig::where('key', 'maintenance_session_id')->first();
+            $validSessionId = $currentSession ? $currentSession->value : null;
             
-            if ($bypassToken === 'karambia1686') {
+            if ($bypassToken && $validSessionId && $bypassToken === $validSessionId) {
                 return $next($request);
             }
 
