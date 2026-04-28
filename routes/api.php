@@ -59,12 +59,28 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/network/olts/{id}/sync', [\App\Http\Controllers\Api\NetworkCenterController::class, 'sync']);
     Route::put('/network/nodes/{id}', [\App\Http\Controllers\Api\NetworkCenterController::class, 'updateNode']);
     Route::post('/network/nodes/{id}/reboot', [\App\Http\Controllers\Api\NetworkCenterController::class, 'reboot']);
+
+    // Admin: Analytics
+    Route::get('/analytics/peak-hours', [\App\Http\Controllers\Api\AnalyticsController::class, 'getPeakHours']);
+
+    // Admin: System Config
+    Route::post('/maintenance/toggle', [\App\Http\Controllers\Api\SystemConfigController::class, 'toggleMaintenance']);
 });
 
+// Public: System Config & Tracking
+Route::get('/maintenance/status', [\App\Http\Controllers\Api\SystemConfigController::class, 'getStatus']);
+Route::post('/maintenance/bypass', [\App\Http\Controllers\Api\SystemConfigController::class, 'verifyBypass']);
+Route::post('/log-visit', [\App\Http\Controllers\Api\AnalyticsController::class, 'logVisit']);
+
+// Public Speedtest Endpoints
+Route::get('/speedtest/ping', [\App\Http\Controllers\Api\SpeedTestController::class, 'ping']);
+Route::get('/speedtest/download', [\App\Http\Controllers\Api\SpeedTestController::class, 'download']);
+Route::post('/speedtest/upload', [\App\Http\Controllers\Api\SpeedTestController::class, 'upload']);
+
 // Public Customer Bill Lookup
-Route::get('/search-bill', [CustomerController::class, 'searchBill']);
+Route::get('/search-bill', [\App\Http\Controllers\Api\CustomerController::class, 'searchBill']);
 Route::get('/check-voucher', [VoucherController::class, 'checkVoucher']);
-Route::get('/customers/{id}/snap-token', [CustomerController::class, 'getSnapToken']);
+Route::get('/customers/{id}/snap-token', [\App\Http\Controllers\Api\CustomerController::class, 'getSnapToken']);
 
 Route::get('/test', function () {
     return response()->json([
