@@ -18,11 +18,13 @@ class TransactionController extends Controller
 {
     protected $wa;
     protected $mikrotik;
+    protected $telegram;
 
-    public function __construct(WhatsAppService $wa, MikrotikService $mikrotik)
+    public function __construct(WhatsAppService $wa, MikrotikService $mikrotik, \App\Services\TelegramService $telegram)
     {
         $this->wa = $wa;
         $this->mikrotik = $mikrotik;
+        $this->telegram = $telegram;
         Config::$serverKey = env('MIDTRANS_SERVER_KEY');
         Config::$isProduction = env('MIDTRANS_IS_PRODUCTION', false);
         Config::$isSanitized = true;

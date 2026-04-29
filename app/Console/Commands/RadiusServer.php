@@ -44,6 +44,9 @@ class RadiusServer extends Command
 
         $this->info("Server is listening...");
         $this->logEvent(null, '0.0.0.0', 'Info', 'Success', "Server started on port $port");
+        
+        // Telegram Alert
+        app(\App\Services\TelegramService::class)->sendMessage("🚀 <b>RADIUS SERVER STARTED</b>\nPort: {$port}\nStatus: Listening for NAS requests...");
 
         while (true) {
             if (function_exists('pcntl_signal_dispatch')) {
@@ -66,6 +69,10 @@ class RadiusServer extends Command
         if ($this->socket) {
             socket_close($this->socket);
         }
+        
+        // Telegram Alert
+        app(\App\Services\TelegramService::class)->sendMessage("⚠️ <b>RADIUS SERVER STOPPED</b>\nStatus: Offline\n<i>Please check server logs if this was unexpected.</i>");
+        
         exit(0);
     }
 
@@ -85,6 +92,10 @@ class RadiusServer extends Command
         if (!isset($this->clients[$from])) {
             $this->warn("Received packet from unknown client: $from");
             $this->logEvent(null, $from, 'Auth', 'Fail', "Unknown client attempted connection");
+            
+            // Telegram Alert (Possible intrusion or config error)
+            app(\App\Services\TelegramService::class)->sendMessage("🛡️ <b>SECURITY ALERT</b>\nAttempt from UNKNOWN IP: <b>{$from}</b>\nStatus: Rejected by Firewall");
+            
             return;
         }
 
