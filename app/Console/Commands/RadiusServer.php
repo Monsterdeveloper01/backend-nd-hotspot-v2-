@@ -6,6 +6,7 @@ use Illuminate\Console\Command;
 use App\Models\Voucher;
 use App\Models\RadiusClient;
 use App\Models\RadiusLog;
+use App\Models\RadiusSession;
 use App\Services\RadiusServerAdapter;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\DB;
@@ -36,6 +37,9 @@ class RadiusServer extends Command
             $this->error("Could not create socket: " . socket_strerror(socket_last_error()));
             return;
         }
+
+        // Fix #5: Set socket timeout for graceful shutdown (2 second timeout)
+        socket_set_option($this->socket, SOL_SOCKET, SO_RCVTIMEO, ['sec' => 2, 'usec' => 0]);
 
         if (!socket_bind($this->socket, '0.0.0.0', $port)) {
             $this->error("Could not bind socket to port $port: " . socket_strerror(socket_last_error()));
@@ -84,7 +88,7 @@ class RadiusServer extends Command
 
     private function handlePacket($data, $from, $fromPort)
     {
-        // 5. loadClients() Refresh Logic (Cooldown/Cache)
+        // loadClients() Refresh Logic (Cooldown/Cache)
         if (time() - $this->lastClientRefresh > 60 || !isset($this->clients[$from])) {
             $this->loadClients();
         }
@@ -117,16 +121,16 @@ class RadiusServer extends Command
 
         switch ($code) {
             case RadiusServerAdapter::TYPE_ACCESS_REQUEST:
-                $this->handleAccessRequest($identifier, $attributes, $from, $fromPort, $secret, $authenticator);
+                $this->handleAccessRequest($identifier, $attributes, $from, $fromPort, $secret, $authenticator, $data);
                 break;
             
             case RadiusServerAdapter::TYPE_ACCOUNTING_REQUEST:
-                $this->handleAccountingRequest($identifier, $attributes, $from, $fromPort, $secret, $authenticator);
+                $this->handleAccountingRequest($identifier, $attributes, $from, $fromPort, $secret, $authenticator, $data);
                 break;
         }
     }
 
-    private function handleAccessRequest($id, $attrs, $from, $port, $secret, $authenticator)
+    private function handleAccessRequest($id, $attrs, $from, $port, $secret, $authenticator, $rawData)
     {
         $username = $attrs[1] ?? null; // 1 = User-Name
         $password = $attrs[2] ?? null; // 2 = User-Password (already decrypted by decodePacket)
@@ -143,6 +147,18 @@ class RadiusServer extends Command
 
             if (!$voucher) {
                 DB::rollBack();
+                
+                // === RADIUS PROXY / CASCADE FEATURE ===
+                $proxyStatus = $this->forwardToUpstreamRadius(RadiusServerAdapter::TYPE_ACCESS_REQUEST, $id, $attrs, $from, $port, $secret, $authenticator);
+                
+                if ($proxyStatus === 'success') {
+                    $this->logEvent($username, $from, 'Proxy', 'Success', "Berhasil Proxy ke RADIUS Lain (" . env('UPSTREAM_RADIUS_IP') . ")");
+                    return;
+                } elseif ($proxyStatus === 'timeout') {
+                    $this->logEvent($username, $from, 'Proxy', 'Fail', "Proxy Gagal: RADIUS Lain (" . env('UPSTREAM_RADIUS_IP') . ") Timeout/Mati");
+                }
+                // ======================================
+
                 $this->sendReject($id, $from, $port, $secret, $authenticator, "Voucher not found");
                 $this->logEvent($username, $from, 'Login', 'Fail', "Voucher code not found: $username");
                 return;
@@ -183,6 +199,16 @@ class RadiusServer extends Command
                     DB::rollBack();
                     $this->sendReject($id, $from, $port, $secret, $authenticator, "Voucher bound to another device");
                     $this->logEvent($username, $from, 'Login', 'Fail', "MAC Mismatch: Expected {$voucher->mac_address}, got $incomingMac");
+                    return;
+                }
+
+                // Fix #4: Concurrent session check
+                $maxSessions = $voucher->plan->shared_users ?? 1;
+                $activeSessions = RadiusSession::activeSessionCount($username);
+                if ($activeSessions >= $maxSessions) {
+                    DB::rollBack();
+                    $this->sendReject($id, $from, $port, $secret, $authenticator, "Max sessions reached ($activeSessions/$maxSessions)");
+                    $this->logEvent($username, $from, 'Login', 'Fail', "Concurrent limit: $activeSessions active, max $maxSessions");
                     return;
                 }
             } elseif ($voucher->status === 'available') {
@@ -238,21 +264,129 @@ class RadiusServer extends Command
         socket_sendto($this->socket, $packet, strlen($packet), 0, $ip, $port);
     }
 
-    private function handleAccountingRequest($id, $attrs, $ip, $port, $secret, $requestAuthenticator)
+    // Fix #3: Full Accounting handler with session tracking
+    private function handleAccountingRequest($id, $attrs, $ip, $port, $secret, $requestAuthenticator, $rawData)
     {
         $username = $attrs[1] ?? 'Unknown';
         $statusType = $attrs[40] ?? 0;
+        $sessionId = $attrs[44] ?? ($attrs[0x2C] ?? uniqid());
         
         $typeStr = 'Accounting';
         if ($statusType == 1) $typeStr = 'Start';
         if ($statusType == 2) $typeStr = 'Stop';
         if ($statusType == 3) $typeStr = 'Interim';
 
-        $this->logEvent($username, $ip, $typeStr, 'Info', "Packet received");
+        // Check if this session or user belongs to our DB
+        $isLocalUser = Voucher::where('code', $username)->exists() || RadiusSession::where('session_id', $sessionId)->exists();
 
+        // If not a local user, forward to proxy
+        if (!$isLocalUser) {
+            $proxyStatus = $this->forwardToUpstreamRadius(RadiusServerAdapter::TYPE_ACCOUNTING_REQUEST, $id, $attrs, $ip, $port, $secret, $requestAuthenticator);
+            if ($proxyStatus === 'success') {
+                $this->logEvent($username, $ip, 'Proxy', 'Info', "Berhasil meneruskan data Accounting ke RADIUS Lain");
+                return;
+            } elseif ($proxyStatus === 'timeout') {
+                $this->logEvent($username, $ip, 'Proxy', 'Fail', "Gagal Accounting: RADIUS Lain Timeout");
+            }
+        }
+
+        try {
+            switch ($statusType) {
+                case 1: // Accounting-Start
+                    RadiusSession::updateOrCreate(
+                        ['session_id' => $sessionId, 'username' => $username],
+                        [
+                            'nas_ip' => $ip,
+                            'nas_port' => $attrs[5] ?? null,
+                            'mac_address' => $attrs[31] ?? null,
+                            'framed_ip' => $attrs[8] ?? null,
+                            'started_at' => now(),
+                            'is_active' => true,
+                            'bytes_in' => 0,
+                            'bytes_out' => 0,
+                            'session_time' => 0,
+                        ]
+                    );
+                    $this->logEvent($username, $ip, 'Start', 'Success', "Session started: $sessionId");
+                    break;
+
+                case 2: // Accounting-Stop
+                    $session = RadiusSession::where('session_id', $sessionId)->first();
+                    if ($session) {
+                        $session->update([
+                            'stopped_at' => now(),
+                            'is_active' => false,
+                            'bytes_in' => $attrs[42] ?? $session->bytes_in,   // Acct-Input-Octets
+                            'bytes_out' => $attrs[43] ?? $session->bytes_out, // Acct-Output-Octets
+                            'session_time' => $attrs[46] ?? $session->session_time, // Acct-Session-Time
+                            'terminate_cause' => $this->getTerminateCause($attrs[49] ?? 0),
+                        ]);
+                    } else {
+                        // Session not found (maybe server restarted), create a closed record
+                        RadiusSession::create([
+                            'session_id' => $sessionId,
+                            'username' => $username,
+                            'nas_ip' => $ip,
+                            'mac_address' => $attrs[31] ?? null,
+                            'framed_ip' => $attrs[8] ?? null,
+                            'stopped_at' => now(),
+                            'is_active' => false,
+                            'bytes_in' => $attrs[42] ?? 0,
+                            'bytes_out' => $attrs[43] ?? 0,
+                            'session_time' => $attrs[46] ?? 0,
+                            'terminate_cause' => $this->getTerminateCause($attrs[49] ?? 0),
+                        ]);
+                    }
+                    $this->logEvent($username, $ip, 'Stop', 'Success', "Session stopped: $sessionId");
+                    break;
+
+                case 3: // Interim-Update
+                    RadiusSession::where('session_id', $sessionId)->update([
+                        'bytes_in' => $attrs[42] ?? 0,
+                        'bytes_out' => $attrs[43] ?? 0,
+                        'session_time' => $attrs[46] ?? 0,
+                    ]);
+                    $this->logEvent($username, $ip, 'Interim', 'Info', "Session update: $sessionId");
+                    break;
+
+                default:
+                    $this->logEvent($username, $ip, $typeStr, 'Info', "Packet received");
+                    break;
+            }
+        } catch (\Exception $e) {
+            $this->error("Accounting Error: " . $e->getMessage());
+            $this->logEvent($username, $ip, $typeStr, 'Fail', "Error: " . $e->getMessage());
+        }
+
+        // Always ACK accounting requests
         $radius = new RadiusServerAdapter();
         $packet = $radius->encodePacket(RadiusServerAdapter::TYPE_ACCOUNTING_RESPONSE, $id, $secret, $requestAuthenticator, []);
         socket_sendto($this->socket, $packet, strlen($packet), 0, $ip, $port);
+    }
+
+    private function getTerminateCause($code)
+    {
+        $causes = [
+            1 => 'User-Request',
+            2 => 'Lost-Carrier',
+            3 => 'Lost-Service',
+            4 => 'Idle-Timeout',
+            5 => 'Session-Timeout',
+            6 => 'Admin-Reset',
+            7 => 'Admin-Reboot',
+            8 => 'Port-Error',
+            9 => 'NAS-Error',
+            10 => 'NAS-Request',
+            11 => 'NAS-Reboot',
+            12 => 'Port-Unneeded',
+            13 => 'Port-Preempted',
+            14 => 'Port-Suspended',
+            15 => 'Service-Unavailable',
+            16 => 'Callback',
+            17 => 'User-Error',
+            18 => 'Host-Request',
+        ];
+        return $causes[$code] ?? "Unknown ($code)";
     }
 
     private function logEvent($username, $ip, $type, $status, $message)
@@ -275,7 +409,7 @@ class RadiusServer extends Command
         $now = now();
         if (preg_match('/(\d+)d/', $durationStr, $m)) $now->addDays((int)$m[1]);
         if (preg_match('/(\d+)h/', $durationStr, $m)) $now->addHours((int)$m[1]);
-        if (preg_match('/(\d+)m/', $durationStr, $m)) $now->addMinutes((int)$m[1]);
+        if (preg_match('/(\d+)m/', $durationStr, $m)) $now->addMonths((int)$m[1]);
         return $now;
     }
 
@@ -284,5 +418,68 @@ class RadiusServer extends Command
         if (!$expiresAt) return 0;
         $diff = Carbon::now()->diffInSeconds($expiresAt, false);
         return $diff > 0 ? $diff : 0;
+    }
+
+    private function forwardToUpstreamRadius($code, $id, $attrs, $from, $port, $mikrotikSecret, $requestAuth)
+    {
+        $upstreamIp = env('UPSTREAM_RADIUS_IP');
+        $upstreamPort = env('UPSTREAM_RADIUS_PORT', 1812);
+        $upstreamSecret = env('UPSTREAM_RADIUS_SECRET');
+
+        if (!$upstreamIp || !$upstreamSecret) {
+            return false; // Proxy disabled or missing secret
+        }
+
+        $radius = new RadiusServerAdapter();
+        
+        // 1. Prepare attributes for Upstream
+        $upstreamAttrs = $attrs;
+        $upstreamRequestAuth = $requestAuth;
+        
+        if ($code == RadiusServerAdapter::TYPE_ACCESS_REQUEST) {
+            $upstreamRequestAuth = random_bytes(16);
+            if (isset($attrs[2])) {
+                // $attrs[2] is the plain text password decrypted earlier. We re-encrypt it for upstream.
+                $upstreamAttrs[2] = $radius->encryptPapPassword($attrs[2], $upstreamSecret, $upstreamRequestAuth);
+            }
+        }
+
+        // 2. Encode packet for Upstream
+        $upstreamPacket = $radius->encodePacket($code, $id, $upstreamSecret, $upstreamRequestAuth, $upstreamAttrs);
+
+        // 3. Send to Upstream
+        $sock = socket_create(AF_INET, SOCK_DGRAM, SOL_UDP);
+        if (!$sock) return false;
+        socket_set_option($sock, SOL_SOCKET, SO_RCVTIMEO, ['sec' => 2, 'usec' => 0]);
+        socket_sendto($sock, $upstreamPacket, strlen($upstreamPacket), 0, $upstreamIp, $upstreamPort);
+        
+        $reply = '';
+        $replyFrom = '';
+        $replyPort = 0;
+        
+        // 4. Wait for Upstream Response
+        if (@socket_recvfrom($sock, $reply, 4096, 0, $replyFrom, $replyPort)) {
+            socket_close($sock);
+            
+            // 5. Decode Upstream's Response
+            $decodedReply = $radius->decodePacket($reply, $upstreamSecret);
+            if (!$decodedReply) return false;
+
+            // 6. Re-encode Response for MikroTik using original RequestAuth and MikroTik Secret
+            $mikrotikPacket = $radius->encodePacket(
+                $decodedReply['code'], 
+                $id, 
+                $mikrotikSecret, 
+                $requestAuth, 
+                $decodedReply['attributes']
+            );
+
+            // 7. Send back to MikroTik
+            socket_sendto($this->socket, $mikrotikPacket, strlen($mikrotikPacket), 0, $from, $port);
+            return true;
+        }
+        
+        socket_close($sock);
+        return false;
     }
 }

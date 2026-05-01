@@ -135,12 +135,37 @@ class RadiusServerAdapter
         if ($code == self::TYPE_ACCESS_ACCEPT || $code == self::TYPE_ACCESS_REJECT || $code == self::TYPE_ACCOUNTING_RESPONSE) {
             // Response Authenticator = MD5(Code + ID + Length + RequestAuth + Attributes + Secret)
             $auth = md5(pack('CCn', $code, $identifier, $length) . $requestAuthenticator . $attrBinary . $secret, true);
+        } elseif ($code == self::TYPE_ACCOUNTING_REQUEST) {
+            // Accounting-Request Authenticator = MD5(Code + ID + Length + 16 Zeroes + Attributes + Secret)
+            $auth = md5(pack('CCn', $code, $identifier, $length) . str_repeat("\x00", 16) . $attrBinary . $secret, true);
         } else {
-            // Usually for server, requests (like Disconnect) have their own logic, 
-            // but for simple Auth/Acct responses, this is standard.
-            $auth = str_repeat("\x00", 16);
+            // Access-Request uses the generated random Request Authenticator
+            $auth = $requestAuthenticator;
         }
 
         return pack('CCn', $code, $identifier, $length) . $auth . $attrBinary;
+    }
+
+    public function encryptPapPassword($password, $secret, $requestAuthenticator)
+    {
+        if ($password === '') return '';
+        
+        $paddedPassword = $password . str_repeat("\x00", 16 - (strlen($password) % 16));
+        if (strlen($password) % 16 === 0) {
+            $paddedPassword = $password;
+        }
+
+        $encrypted = '';
+        $previous = $requestAuthenticator;
+        
+        for ($i = 0; $i < strlen($paddedPassword); $i += 16) {
+            $temp = md5($secret . $previous, true);
+            $block = substr($paddedPassword, $i, 16);
+            $cipher = $block ^ $temp;
+            $encrypted .= $cipher;
+            $previous = $cipher;
+        }
+        
+        return $encrypted;
     }
 }

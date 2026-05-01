@@ -39,7 +39,7 @@ class VoucherHousekeeping extends Command
 
                 if (preg_match('/(\d+)d/', $durationStr, $m)) $expiresAt->addDays((int)$m[1]);
                 if (preg_match('/(\d+)h/', $durationStr, $m)) $expiresAt->addHours((int)$m[1]);
-                if (preg_match('/(\d+)m/', $durationStr, $m)) $expiresAt->addMinutes((int)$m[1]);
+                if (preg_match('/(\d+)m/', $durationStr, $m)) $expiresAt->addMonths((int)$m[1]);
                 
                 $voucher->update([
                     'status' => 'used',

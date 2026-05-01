@@ -10,3 +10,4 @@ Artisan::command('inspire', function () {
 use Illuminate\Support\Facades\Schedule;
 Schedule::command('app:send-daily-sales-report')->dailyAt('07:00');
 Schedule::command('billing:check')->dailyAt('07:00');
+Schedule::command('voucher:cleanup')->everyFiveMinutes();
