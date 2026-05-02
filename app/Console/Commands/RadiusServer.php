@@ -28,41 +28,49 @@ class RadiusServer extends Command
         }
 
         $port = $this->option('port');
-        $this->info("ND-Hotspot RADIUS Server starting on port $port...");
+        $acctPort = $port + 1;
+        $this->info("ND-Hotspot RADIUS Server starting on port $port (Auth) & $acctPort (Acct)...");
 
         $this->loadClients();
 
-        $this->socket = socket_create(AF_INET, SOCK_DGRAM, SOL_UDP);
-        if (!$this->socket) {
-            $this->error("Could not create socket: " . socket_strerror(socket_last_error()));
+        $this->authSocket = socket_create(AF_INET, SOCK_DGRAM, SOL_UDP);
+        if (!$this->authSocket || !socket_bind($this->authSocket, '0.0.0.0', $port)) {
+            $this->error("Could not bind Auth socket to port $port");
             return;
         }
 
-        // Fix #5: Set socket timeout for graceful shutdown (2 second timeout)
-        socket_set_option($this->socket, SOL_SOCKET, SO_RCVTIMEO, ['sec' => 2, 'usec' => 0]);
-
-        if (!socket_bind($this->socket, '0.0.0.0', $port)) {
-            $this->error("Could not bind socket to port $port: " . socket_strerror(socket_last_error()));
+        $this->acctSocket = socket_create(AF_INET, SOCK_DGRAM, SOL_UDP);
+        if (!$this->acctSocket || !socket_bind($this->acctSocket, '0.0.0.0', $acctPort)) {
+            $this->error("Could not bind Acct socket to port $acctPort");
             return;
         }
 
-        $this->info("Server is listening...");
-        $this->logEvent(null, '0.0.0.0', 'Info', 'Success', "Server started on port $port");
+        $this->info("Server is listening on both ports...");
+        $this->logEvent(null, '0.0.0.0', 'Info', 'Success', "Server started on Auth ($port) and Acct ($acctPort)");
         
         // Telegram Alert
-        app(\App\Services\TelegramService::class)->sendMessage("🚀 <b>RADIUS SERVER STARTED</b>\nPort: {$port}\nStatus: Listening for NAS requests...");
+        app(\App\Services\TelegramService::class)->sendMessage("🚀 <b>RADIUS SERVER STARTED</b>\nPort: {$port}, {$acctPort}\nStatus: Listening for NAS requests...");
 
         while (true) {
             if (function_exists('pcntl_signal_dispatch')) {
                 pcntl_signal_dispatch();
             }
 
-            $from = '';
-            $fromPort = 0;
-            $data = '';
+            $read = [$this->authSocket, $this->acctSocket];
+            $write = null;
+            $except = null;
             
-            if (@socket_recvfrom($this->socket, $data, 1024, 0, $from, $fromPort)) {
-                $this->handlePacket($data, $from, $fromPort);
+            // Wait for data with 2 sec timeout
+            if (@socket_select($read, $write, $except, 2, 0) > 0) {
+                foreach ($read as $sock) {
+                    $from = '';
+                    $fromPort = 0;
+                    $data = '';
+                    if (@socket_recvfrom($sock, $data, 1024, 0, $from, $fromPort)) {
+                        $this->currentSocket = $sock;
+                        $this->handlePacket($data, $from, $fromPort);
+                    }
+                }
             }
         }
     }
@@ -70,9 +78,8 @@ class RadiusServer extends Command
     public function shutdown()
     {
         $this->info("Shutting down RADIUS server...");
-        if ($this->socket) {
-            socket_close($this->socket);
-        }
+        if ($this->authSocket) socket_close($this->authSocket);
+        if ($this->acctSocket) socket_close($this->acctSocket);
         
         // Telegram Alert
         app(\App\Services\TelegramService::class)->sendMessage("⚠️ <b>RADIUS SERVER STOPPED</b>\nStatus: Offline\n<i>Please check server logs if this was unexpected.</i>");
@@ -82,7 +89,8 @@ class RadiusServer extends Command
 
     private function loadClients()
     {
-        $this->clients = RadiusClient::all()->pluck('shared_secret', 'ip_address')->toArray();
+        $clients = RadiusClient::all()->pluck('shared_secret', 'ip_address')->toArray();
+        $this->clients = array_map('trim', $clients);
         $this->lastClientRefresh = time();
     }
 
@@ -164,21 +172,42 @@ class RadiusServer extends Command
                 return;
             }
 
-            // Password verification
-            if ($password !== $voucher->code && $password !== '1') {
-                // Heuristic: If password fails, maybe our secret was old? 
-                if (time() - $this->lastClientRefresh > 2) {
-                    $this->loadClients();
-                    $secret = $this->clients[$from] ?? $secret;
-                    $radius = new RadiusServerAdapter();
-                    $newPassword = $radius->decryptPapPassword($attrs[2] ?? '', $secret, $authenticator);
-                    if ($newPassword === $voucher->code || $newPassword === '1') {
-                        $password = $newPassword;
+            // Password verification (PAP and CHAP support)
+            $isAuthenticated = false;
+            $papPassword = $attrs[2] ?? null;
+            $chapPassword = $attrs[3] ?? null;
+
+            if ($papPassword !== null) {
+                // PAP Verification
+                if ($papPassword === $voucher->code || $papPassword === '1') {
+                    $isAuthenticated = true;
+                } else {
+                    // Heuristic: If password fails, maybe our secret was old? 
+                    if (time() - $this->lastClientRefresh > 2) {
+                        $this->loadClients();
+                        $secret = $this->clients[$from] ?? $secret;
+                        $radius = new RadiusServerAdapter();
+                        $newPassword = $radius->decryptPapPassword($attrs[2] ?? '', $secret, $authenticator);
+                        if ($newPassword === $voucher->code || $newPassword === '1') {
+                            $isAuthenticated = true;
+                        }
                     }
+                }
+            } elseif ($chapPassword !== null) {
+                // CHAP Verification
+                $chapIdent = substr($chapPassword, 0, 1);
+                $chapHash = substr($chapPassword, 1);
+                $chapChallenge = $attrs[60] ?? $authenticator; // Attr 60 or Request Authenticator
+                
+                $expectedHash = md5($chapIdent . $voucher->code . $chapChallenge, true);
+                $expectedHashFallback = md5($chapIdent . '1' . $chapChallenge, true);
+                
+                if ($chapHash === $expectedHash || $chapHash === $expectedHashFallback) {
+                    $isAuthenticated = true;
                 }
             }
 
-            if ($password !== $voucher->code && $password !== '1') {
+            if (!$isAuthenticated) {
                 DB::rollBack();
                 $this->sendReject($id, $from, $port, $secret, $authenticator, "Wrong password");
                 $this->logEvent($username, $from, 'Login', 'Fail', "Invalid password attempt for: $username");
@@ -202,13 +231,24 @@ class RadiusServer extends Command
                     return;
                 }
 
-                // Fix #4: Concurrent session check
+                // Fix #4: Concurrent session check (Anti Stale-Session)
                 $maxSessions = $voucher->plan->shared_users ?? 1;
-                $activeSessions = RadiusSession::activeSessionCount($username);
-                if ($activeSessions >= $maxSessions) {
+                $incomingMac = $attrs[31] ?? null; // 31 = Calling-Station-Id
+                
+                // Count active sessions from OTHER MAC addresses
+                $activeOtherDevices = RadiusSession::where('username', $username)
+                    ->where('is_active', true);
+                    
+                if ($incomingMac) {
+                    $activeOtherDevices->where('mac_address', '!=', $incomingMac);
+                }
+                
+                $activeOtherCount = $activeOtherDevices->count();
+
+                if ($activeOtherCount >= $maxSessions) {
                     DB::rollBack();
-                    $this->sendReject($id, $from, $port, $secret, $authenticator, "Max sessions reached ($activeSessions/$maxSessions)");
-                    $this->logEvent($username, $from, 'Login', 'Fail', "Concurrent limit: $activeSessions active, max $maxSessions");
+                    $this->sendReject($id, $from, $port, $secret, $authenticator, "Simultaneous session limit reached");
+                    $this->logEvent($username, $from, 'Login', 'Fail', "Concurrent limit: $activeOtherCount active on other devices, max $maxSessions");
                     return;
                 }
             } elseif ($voucher->status === 'available') {
@@ -242,17 +282,23 @@ class RadiusServer extends Command
     {
         $radius = new RadiusServerAdapter();
         $responseAttrs = [
-            27 => $this->getRemainingSeconds($voucher->expires_at),
             28 => 300,
         ];
 
-        if ($voucher->plan) {
-            $rateLimit = ($voucher->plan->upload_limit ?: '0') . 'k/' . ($voucher->plan->download_limit ?: '0') . 'k';
-            $responseAttrs['Vendor-Specific'] = [149 => [8 => $rateLimit]];
+        $remaining = $this->getRemainingSeconds($voucher->expires_at);
+        if ($remaining > 0) {
+            $responseAttrs[27] = $remaining;
+        }
+
+        if ($voucher->plan && ((int)$voucher->plan->upload_limit > 0 || (int)$voucher->plan->download_limit > 0)) {
+            $up = ((int)$voucher->plan->upload_limit ?: 1) * 1024;
+            $down = ((int)$voucher->plan->download_limit ?: 1) * 1024;
+            $rateLimit = $up . 'k/' . $down . 'k';
+            $responseAttrs['Vendor-Specific'] = [14988 => [8 => $rateLimit]];
         }
 
         $packet = $radius->encodePacket(RadiusServerAdapter::TYPE_ACCESS_ACCEPT, $id, $secret, $requestAuthenticator, $responseAttrs);
-        socket_sendto($this->socket, $packet, strlen($packet), 0, $ip, $port);
+        socket_sendto($this->currentSocket, $packet, strlen($packet), 0, $ip, $port);
     }
 
     private function sendReject($id, $ip, $port, $secret, $requestAuthenticator, $reason = "")
@@ -261,7 +307,7 @@ class RadiusServer extends Command
         $packet = $radius->encodePacket(RadiusServerAdapter::TYPE_ACCESS_REJECT, $id, $secret, $requestAuthenticator, [
             18 => $reason
         ]);
-        socket_sendto($this->socket, $packet, strlen($packet), 0, $ip, $port);
+        socket_sendto($this->currentSocket, $packet, strlen($packet), 0, $ip, $port);
     }
 
     // Fix #3: Full Accounting handler with session tracking
@@ -283,10 +329,14 @@ class RadiusServer extends Command
         if (!$isLocalUser) {
             $proxyStatus = $this->forwardToUpstreamRadius(RadiusServerAdapter::TYPE_ACCOUNTING_REQUEST, $id, $attrs, $ip, $port, $secret, $requestAuthenticator);
             if ($proxyStatus === 'success') {
-                $this->logEvent($username, $ip, 'Proxy', 'Info', "Berhasil meneruskan data Accounting ke RADIUS Lain");
-                return;
+                // Jangan log setiap interim agar tidak spam, log start/stop saja
+                if ($statusType == 1 || $statusType == 2) {
+                    $this->logEvent($username, $ip, 'Proxy', 'Info', "Berhasil meneruskan data Accounting $typeStr ke RL Radius");
+                }
+                return; // Cukup lempar saja, jangan catat di lokal
             } elseif ($proxyStatus === 'timeout') {
-                $this->logEvent($username, $ip, 'Proxy', 'Fail', "Gagal Accounting: RADIUS Lain Timeout");
+                $this->logEvent($username, $ip, 'Proxy', 'Fail', "Gagal Accounting: RL Radius Timeout");
+                return;
             }
         }
 
@@ -346,7 +396,7 @@ class RadiusServer extends Command
                         'bytes_out' => $attrs[43] ?? 0,
                         'session_time' => $attrs[46] ?? 0,
                     ]);
-                    $this->logEvent($username, $ip, 'Interim', 'Info', "Session update: $sessionId");
+                    // Silent logging for Interim to prevent spam
                     break;
 
                 default:
@@ -358,10 +408,10 @@ class RadiusServer extends Command
             $this->logEvent($username, $ip, $typeStr, 'Fail', "Error: " . $e->getMessage());
         }
 
-        // Always ACK accounting requests
+        // Always ACK accounting requests for local users
         $radius = new RadiusServerAdapter();
         $packet = $radius->encodePacket(RadiusServerAdapter::TYPE_ACCOUNTING_RESPONSE, $id, $secret, $requestAuthenticator, []);
-        socket_sendto($this->socket, $packet, strlen($packet), 0, $ip, $port);
+        socket_sendto($this->currentSocket, $packet, strlen($packet), 0, $ip, $port);
     }
 
     private function getTerminateCause($code)
@@ -423,17 +473,22 @@ class RadiusServer extends Command
     private function forwardToUpstreamRadius($code, $id, $attrs, $from, $port, $mikrotikSecret, $requestAuth)
     {
         $upstreamIp = env('UPSTREAM_RADIUS_IP');
-        $upstreamPort = env('UPSTREAM_RADIUS_PORT', 1812);
+        $upstreamPort = ($code == RadiusServerAdapter::TYPE_ACCOUNTING_REQUEST) 
+            ? env('UPSTREAM_RADIUS_PORT', 1812) + 1 
+            : env('UPSTREAM_RADIUS_PORT', 1812);
+        
         $upstreamSecret = env('UPSTREAM_RADIUS_SECRET');
 
         if (!$upstreamIp || !$upstreamSecret) {
-            return false; // Proxy disabled or missing secret
+            return 'disabled'; // Proxy disabled or missing secret
         }
 
         $radius = new RadiusServerAdapter();
         
         // 1. Prepare attributes for Upstream
         $upstreamAttrs = $attrs;
+        unset($upstreamAttrs[80]); // Strip original Message-Authenticator as it uses Mikrotik's secret
+        
         $upstreamRequestAuth = $requestAuth;
         
         if ($code == RadiusServerAdapter::TYPE_ACCESS_REQUEST) {
@@ -442,6 +497,11 @@ class RadiusServer extends Command
                 // $attrs[2] is the plain text password decrypted earlier. We re-encrypt it for upstream.
                 $upstreamAttrs[2] = $radius->encryptPapPassword($attrs[2], $upstreamSecret, $upstreamRequestAuth);
             }
+            if (isset($attrs[3]) && !isset($attrs[60])) {
+                // Proxying CHAP: If no explicit CHAP-Challenge, the original challenge was the original RequestAuthenticator.
+                // We must pass it to the upstream RADIUS so it can verify the CHAP hash!
+                $upstreamAttrs[60] = $requestAuth;
+            }
         }
 
         // 2. Encode packet for Upstream
@@ -449,7 +509,7 @@ class RadiusServer extends Command
 
         // 3. Send to Upstream
         $sock = socket_create(AF_INET, SOCK_DGRAM, SOL_UDP);
-        if (!$sock) return false;
+        if (!$sock) return 'error';
         socket_set_option($sock, SOL_SOCKET, SO_RCVTIMEO, ['sec' => 2, 'usec' => 0]);
         socket_sendto($sock, $upstreamPacket, strlen($upstreamPacket), 0, $upstreamIp, $upstreamPort);
         
@@ -463,23 +523,26 @@ class RadiusServer extends Command
             
             // 5. Decode Upstream's Response
             $decodedReply = $radius->decodePacket($reply, $upstreamSecret);
-            if (!$decodedReply) return false;
+            if (!$decodedReply) return 'error';
 
             // 6. Re-encode Response for MikroTik using original RequestAuth and MikroTik Secret
+            $attrsToMikrotik = $decodedReply['attributes'];
+            unset($attrsToMikrotik[80]); // Strip upstream's Message-Authenticator so we can generate a fresh one for MikroTik
+            
             $mikrotikPacket = $radius->encodePacket(
                 $decodedReply['code'], 
                 $id, 
                 $mikrotikSecret, 
                 $requestAuth, 
-                $decodedReply['attributes']
+                $attrsToMikrotik
             );
 
             // 7. Send back to MikroTik
-            socket_sendto($this->socket, $mikrotikPacket, strlen($mikrotikPacket), 0, $from, $port);
-            return true;
+            socket_sendto($this->currentSocket, $mikrotikPacket, strlen($mikrotikPacket), 0, $from, $port);
+            return 'success';
         }
         
         socket_close($sock);
-        return false;
+        return 'timeout';
     }
 }

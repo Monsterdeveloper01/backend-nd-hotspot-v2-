@@ -77,6 +77,16 @@ class RadiusServerAdapter
             case 6: // Service-Type
             case 27: // Session-Timeout
             case 40: // Acct-Status-Type
+            case 41: // Acct-Delay-Time
+            case 42: // Acct-Input-Octets
+            case 43: // Acct-Output-Octets
+            case 45: // Acct-Authentic
+            case 46: // Acct-Session-Time
+            case 47: // Acct-Input-Packets
+            case 48: // Acct-Output-Packets
+            case 49: // Acct-Terminate-Cause
+            case 52: // Acct-Input-Gigawords
+            case 53: // Acct-Output-Gigawords
                 // 5. decodeAttribute() untuk Integer — Guard Length
                 if (strlen($value) < 4) return 0;
                 $val = unpack('N', $value);
@@ -112,15 +122,12 @@ class RadiusServerAdapter
             if ($type === 'Vendor-Specific') {
                 foreach ($value as $vId => $vAttrs) {
                     foreach ($vAttrs as $vType => $vVal) {
-                        // 4. Vendor-Specific Attribute (VSA) Encoding Corrected
-                        // Format: Vendor-Id(4) | Vendor-Type(1) | Vendor-Length(1) | Value
                         $vData = pack('N', $vId) . pack('CC', $vType, strlen($vVal) + 2) . $vVal;
                         $attrBinary .= pack('CC', 26, strlen($vData) + 2) . $vData;
                     }
                 }
             } else {
                 $isNumeric = in_array($type, [5, 6, 27, 28, 40]);
-                
                 if ($isNumeric) {
                     $val = (int)$value;
                     $attrBinary .= pack('CC', $type, 6) . pack('N', $val);
@@ -130,20 +137,32 @@ class RadiusServerAdapter
             }
         }
 
+        // Add Message-Authenticator (80) if it's an Access response or request
+        $hasMsgAuth = in_array($code, [self::TYPE_ACCESS_REQUEST, self::TYPE_ACCESS_ACCEPT, self::TYPE_ACCESS_REJECT, 11]);
+        if ($hasMsgAuth) {
+            $attrBinary .= pack('CC', 80, 18) . str_repeat("\x00", 16);
+        }
+
         $length = 20 + strlen($attrBinary);
-        
+        $header = pack('CCn', $code, $identifier, $length);
+
+        if ($hasMsgAuth) {
+            // Compute HMAC-MD5 over (Header + RequestAuth + AttributesWithZeroMsgAuth)
+            $hmacData = $header . $requestAuthenticator . $attrBinary;
+            $msgAuthHash = hash_hmac('md5', $hmacData, $secret, true);
+            // Replace the last 16 bytes (which are the zeroed Message-Authenticator) with the computed hash
+            $attrBinary = substr($attrBinary, 0, -16) . $msgAuthHash;
+        }
+
         if ($code == self::TYPE_ACCESS_ACCEPT || $code == self::TYPE_ACCESS_REJECT || $code == self::TYPE_ACCOUNTING_RESPONSE) {
-            // Response Authenticator = MD5(Code + ID + Length + RequestAuth + Attributes + Secret)
-            $auth = md5(pack('CCn', $code, $identifier, $length) . $requestAuthenticator . $attrBinary . $secret, true);
+            $auth = md5($header . $requestAuthenticator . $attrBinary . $secret, true);
         } elseif ($code == self::TYPE_ACCOUNTING_REQUEST) {
-            // Accounting-Request Authenticator = MD5(Code + ID + Length + 16 Zeroes + Attributes + Secret)
-            $auth = md5(pack('CCn', $code, $identifier, $length) . str_repeat("\x00", 16) . $attrBinary . $secret, true);
+            $auth = md5($header . str_repeat("\x00", 16) . $attrBinary . $secret, true);
         } else {
-            // Access-Request uses the generated random Request Authenticator
             $auth = $requestAuthenticator;
         }
 
-        return pack('CCn', $code, $identifier, $length) . $auth . $attrBinary;
+        return $header . $auth . $attrBinary;
     }
 
     public function encryptPapPassword($password, $secret, $requestAuthenticator)
