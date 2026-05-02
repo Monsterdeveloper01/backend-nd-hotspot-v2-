@@ -15,6 +15,14 @@ class WhatsAppService
 
     public function sendMessage($number, $message)
     {
+        // Normalize number to international format (62 for Indonesia)
+        $number = preg_replace('/\D/', '', $number);
+        if (str_starts_with($number, '0')) {
+            $number = '62' . substr($number, 1);
+        } elseif (!str_starts_with($number, '62')) {
+            $number = '62' . $number;
+        }
+
         try {
             $response = Http::post("{$this->baseUrl}/send-message", [
                 'number' => $number,

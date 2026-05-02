@@ -86,11 +86,19 @@ class VoucherPlanController extends Controller
     {
         $plan = VoucherPlan::findOrFail($id);
         
-        // Prevent deletion if vouchers are using this plan (online, sold, or stock)
+        // 1. Prevent deletion if vouchers are using this plan
         $vouchersCount = \App\Models\Voucher::where('voucher_plan_id', $id)->count();
         if ($vouchersCount > 0) {
             return response()->json([
-                'message' => "Gagal menghapus! Terdapat {$vouchersCount} data voucher yang masih menggunakan profile ini. Hapus voucher terkait terlebih dahulu dari menu Voucher Stock/Sold."
+                'message' => "Gagal menghapus! Terdapat {$vouchersCount} data voucher yang menggunakan paket ini. Hapus data voucher terkait terlebih dahulu."
+            ], 422);
+        }
+
+        // 2. Prevent deletion if transactions are using this plan
+        $transactionsCount = \App\Models\Transaction::where('voucher_plan_id', $id)->count();
+        if ($transactionsCount > 0) {
+            return response()->json([
+                'message' => "Gagal menghapus! Paket ini memiliki {$transactionsCount} data transaksi/penjualan. Untuk menjaga integritas laporan keuangan, paket yang sudah pernah terjual tidak dapat dihapus."
             ], 422);
         }
 

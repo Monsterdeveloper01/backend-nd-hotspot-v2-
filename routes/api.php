@@ -40,6 +40,7 @@ Route::middleware('auth:sanctum')->group(function () {
     // Admin: RADIUS Management
     Route::get('/radius-clients', [RadiusClientController::class, 'index']);
     Route::get('/radius-logs', [RadiusClientController::class, 'getLogs']);
+    Route::get('/radius-status', [RadiusClientController::class, 'status']);
     Route::post('/radius-clients', [RadiusClientController::class, 'store']);
     Route::delete('/radius-clients/{id}', [RadiusClientController::class, 'destroy']);
 

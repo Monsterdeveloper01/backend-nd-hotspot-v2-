@@ -54,7 +54,7 @@ class DashboardController extends Controller
         // Customers
         $totalCustomers = Customer::count();
         $dueCustomers = Customer::where('due_date', '<', Carbon::now())->count();
-        $isolatedCustomers = Customer::where('status_bayar', 'Belum Bayar')->where('due_date', '<', Carbon::now()->subDays(3))->count();
+        $isolatedCustomers = Customer::where('status_bayar', 'unpaid')->where('due_date', '<', Carbon::now()->subDays(3))->count();
 
         // Vouchers Sold
         $voucherSoldToday = Voucher::where('status', 'sold')

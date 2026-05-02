@@ -37,9 +37,32 @@ class VoucherController extends Controller
         return response()->json($voucher);
     }
 
-    public function index()
+    public function index(Request $request)
     {
-        return Voucher::with('plan')->latest()->paginate(15);
+        $query = Voucher::with('plan')->latest();
+
+        if ($search = $request->query('search')) {
+            $query->where(function($q) use ($search) {
+                $q->where('code', 'like', "%{$search}%")
+                  ->orWhere('customer_phone', 'like', "%{$search}%");
+            });
+        }
+
+        if ($filter = $request->query('status')) {
+            if ($filter !== 'all') {
+                $query->where('status', $filter);
+            }
+        }
+
+        $paginated = $query->paginate(15);
+
+        $stats = [
+            'total' => Voucher::count(),
+            'available' => Voucher::where('status', 'available')->count(),
+            'used' => Voucher::where('status', 'used')->count(),
+        ];
+
+        return response()->json(array_merge($paginated->toArray(), ['stats' => $stats]));
     }
 
     /**
@@ -59,6 +82,14 @@ class VoucherController extends Controller
             })
             ->orderBy('used_at', 'desc')
             ->get();
+
+        $activeUsernames = \App\Models\RadiusSession::where('is_active', true)
+            ->pluck('username')
+            ->toArray();
+
+        $vouchers->each(function($v) use ($activeUsernames) {
+            $v->is_online = in_array($v->code, $activeUsernames);
+        });
 
         return response()->json($vouchers);
     }
@@ -87,9 +118,11 @@ class VoucherController extends Controller
         $request->validate([
             'voucher_plan_id' => 'required|exists:voucher_plans,id',
             'quantity' => 'required|integer|min:1|max:100',
+            'type' => 'nullable|string|in:radius,mikrotik'
         ]);
 
         $plan = VoucherPlan::findOrFail($request->voucher_plan_id);
+        $type = $request->type ?? 'radius'; // Default to radius as per user preference
         $vouchers = [];
 
         for ($i = 0; $i < $request->quantity; $i++) {
@@ -97,27 +130,36 @@ class VoucherController extends Controller
                 $code = strtoupper(Str::random(6));
             } while (Voucher::where('code', $code)->exists());
 
-            $mikrotikResult = $this->mikrotik->createUser([
-                'username' => $code,
-                'password' => '', 
-                'profile' => $plan->name,
-                'limit_uptime' => $plan->duration ?: '0'
-            ]);
+            $mikrotikId = null;
 
-            if ($mikrotikResult) {
-                $voucher = Voucher::create([
-                    'voucher_plan_id' => $plan->id,
-                    'code' => $code,
-                    'price' => $plan->price,
-                    'status' => 'available',
-                    'mikrotik_id' => $mikrotikResult[0]['.id'] ?? null
+            if ($type === 'mikrotik') {
+                $mikrotikResult = $this->mikrotik->createUser([
+                    'username' => $code,
+                    'password' => '', 
+                    'profile' => $plan->name,
+                    'limit_uptime' => $plan->duration ?: '0'
                 ]);
-                $vouchers[] = $voucher;
+                $mikrotikId = $mikrotikResult[0]['.id'] ?? null;
+                
+                if (!$mikrotikResult) {
+                    continue; // Skip if mikrotik creation fails in local mode
+                }
             }
+
+            // Create in Local DB (Radius will read from here)
+            $voucher = Voucher::create([
+                'voucher_plan_id' => $plan->id,
+                'code' => $code,
+                'price' => $plan->price,
+                'status' => 'available',
+                'mikrotik_id' => $mikrotikId
+            ]);
+            
+            $vouchers[] = $voucher;
         }
 
         return response()->json([
-            'message' => count($vouchers) . ' voucher(s) generated successfully.',
+            'message' => count($vouchers) . " voucher(s) generated successfully using " . strtoupper($type) . " system.",
             'vouchers' => $vouchers
         ]);
     }
@@ -125,9 +167,24 @@ class VoucherController extends Controller
     public function destroy($id)
     {
         $voucher = Voucher::findOrFail($id);
-        $this->mikrotik->deleteUser($voucher->code);
+        
+        // Prevent deletion if voucher is linked to transactions
+        $transactionsCount = \App\Models\Transaction::where('voucher_id', $id)->count();
+        if ($transactionsCount > 0) {
+            return response()->json([
+                'message' => "Gagal menghapus! Voucher ini memiliki {$transactionsCount} data transaksi. Anda tidak dapat menghapus voucher yang sudah terjual untuk menjaga validitas laporan keuangan."
+            ], 422);
+        }
+
+        // Safe delete from Mikrotik and Local DB
+        try {
+            $this->mikrotik->deleteUser($voucher->code);
+        } catch (\Exception $e) {
+            \Log::warning("Mikrotik delete user failed for {$voucher->code}: " . $e->getMessage());
+        }
+
         $voucher->delete();
-        return response()->json(['message' => 'Voucher deleted successfully.']);
+        return response()->json(['message' => 'Voucher berhasil dihapus.']);
     }
 
     /**
@@ -137,6 +194,12 @@ class VoucherController extends Controller
     {
         $activeUsers = $this->mikrotik->getActiveUsers();
         
+        // 1. Sync stale RadiusSessions
+        $activeMikrotikUsernames = collect($activeUsers)->pluck('user')->toArray();
+        \App\Models\RadiusSession::where('is_active', true)
+            ->whereNotIn('username', $activeMikrotikUsernames)
+            ->update(['is_active' => false, 'stopped_at' => now()]);
+
         foreach ($activeUsers as $active) {
             $code = $active['user'] ?? null;
             if (!$code) continue;

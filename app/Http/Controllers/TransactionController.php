@@ -129,13 +129,38 @@ class TransactionController extends Controller
 
                 if (!$voucher) {
                     // Generate new voucher on the fly if stock is empty
+                    $voucherCode = Str::upper(Str::random(8));
+                    
+                    $mikrotikId = null;
+                    if (env('VOUCHER_MODE', 'radius') === 'mikrotik') {
+                        $mikrotikResult = $this->mikrotik->createUser([
+                            'username' => $voucherCode,
+                            'password' => '', 
+                            'profile' => $transaction->plan->name,
+                            'limit_uptime' => $transaction->plan->duration ?: '0'
+                        ]);
+                        $mikrotikId = $mikrotikResult[0]['.id'] ?? null;
+                    }
+
                     $voucher = Voucher::create([
                         'voucher_plan_id' => $transaction->voucher_plan_id,
-                        'code' => Str::upper(Str::random(8)),
+                        'code' => $voucherCode,
                         'status' => 'sold',
-                        'customer_phone' => $transaction->customer_phone
+                        'customer_phone' => $transaction->customer_phone,
+                        'mikrotik_id' => $mikrotikId
                     ]);
                 } else {
+                    // If using existing stock, check if we need to inject into Mikrotik
+                    if (env('VOUCHER_MODE', 'radius') === 'mikrotik' && !$voucher->mikrotik_id) {
+                        $mikrotikResult = $this->mikrotik->createUser([
+                            'username' => $voucher->code,
+                            'password' => '', 
+                            'profile' => $transaction->plan->name,
+                            'limit_uptime' => $transaction->plan->duration ?: '0'
+                        ]);
+                        $voucher->mikrotik_id = $mikrotikResult[0]['.id'] ?? null;
+                    }
+                    
                     $voucher->status = 'sold';
                     $voucher->customer_phone = $transaction->customer_phone;
                     $voucher->save();

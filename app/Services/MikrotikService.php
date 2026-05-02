@@ -78,9 +78,9 @@ class MikrotikService
             '?name' => $oldName
         ]);
         
-        if (empty($profiles)) {
-            $this->client->disconnect();
-            return false;
+        if (!is_array($profiles) || empty($profiles) || !isset($profiles[0]['.id'])) {
+            // Profile doesn't exist on router? Try creating it instead (Self-Healing)
+            return $this->createProfile($data);
         }
 
         $rateLimit = ($data['upload_limit'] ?: '0') . '/' . ($data['download_limit'] ?: '0');
@@ -114,7 +114,7 @@ class MikrotikService
             '?name' => $name
         ]);
         
-        if (!empty($profiles)) {
+        if (is_array($profiles) && !empty($profiles) && isset($profiles[0]['.id'])) {
             $this->client->comm('/ip/hotspot/user/profile/remove', [
                 '.id' => $profiles[0]['.id']
             ]);
@@ -150,7 +150,7 @@ class MikrotikService
             '?name' => $username
         ]);
         
-        if (!empty($users)) {
+        if (is_array($users) && !empty($users) && isset($users[0]['.id'])) {
             $this->client->comm('/ip/hotspot/user/remove', [
                 '.id' => $users[0]['.id']
             ]);
@@ -168,7 +168,7 @@ class MikrotikService
             '?name' => $username
         ]);
         
-        if (!empty($users)) {
+        if (is_array($users) && !empty($users) && isset($users[0]['.id'])) {
             $this->client->comm('/ip/hotspot/user/set', [
                 '.id' => $users[0]['.id'],
                 'disabled' => $enabled ? 'no' : 'yes'
@@ -187,10 +187,14 @@ class MikrotikService
             '?user' => $username
         ]);
         
-        foreach ($sessions as $session) {
-            $this->client->comm('/ip/hotspot/active/remove', [
-                '.id' => $session['.id']
-            ]);
+        if (is_array($sessions)) {
+            foreach ($sessions as $session) {
+                if (isset($session['.id'])) {
+                    $this->client->comm('/ip/hotspot/active/remove', [
+                        '.id' => $session['.id']
+                    ]);
+                }
+            }
         }
         
         $this->client->disconnect();
@@ -205,10 +209,14 @@ class MikrotikService
             '?user' => $username
         ]);
         
-        foreach ($cookies as $cookie) {
-            $this->client->comm('/ip/hotspot/cookie/remove', [
-                '.id' => $cookie['.id']
-            ]);
+        if (is_array($cookies)) {
+            foreach ($cookies as $cookie) {
+                if (isset($cookie['.id'])) {
+                    $this->client->comm('/ip/hotspot/cookie/remove', [
+                        '.id' => $cookie['.id']
+                    ]);
+                }
+            }
         }
         
         $this->client->disconnect();
@@ -283,19 +291,33 @@ class RouterosAPI {
     }
 
     function login($user, $pass) {
-        $this->write('/login');
+        // RouterOS v6.43+ and v7+ authentication process
+        $this->write('/login', false);
+        $this->write('=name=' . $user, false);
+        $this->write('=password=' . $pass);
         $res = $this->read(false);
+
         if (isset($res[0]) && $res[0] == '!done') {
-            if (isset($res[1])) {
-                $challange = substr($res[1], 9);
-                $md5 = md5(chr(0) . $pass . pack('H*', $challange));
+            // Check if it's the pre-6.43 challenge response
+            if (isset($res[1]) && strpos($res[1], '=ret=') === 0) {
+                $challenge = substr($res[1], 5);
+                $md5 = md5(chr(0) . $pass . pack('H*', $challenge));
+                
                 $this->write('/login', false);
                 $this->write('=name=' . $user, false);
                 $this->write('=response=00' . $md5);
-                $res = $this->read(false);
-                if ($res[0] == '!done') return true;
+                $res2 = $this->read(false);
+                
+                if (isset($res2[0]) && $res2[0] == '!done') {
+                    return true;
+                }
+                return false;
             }
+            
+            // Post 6.43+ successful plain auth
+            return true;
         }
+        
         return false;
     }
 

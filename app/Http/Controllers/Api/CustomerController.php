@@ -86,11 +86,19 @@ class CustomerController extends Controller
         $customer->due_date = Carbon::parse($customer->due_date)->addMonth();
         $customer->save();
 
-        // Re-enable in Mikrotik if isolated
-        $this->mikrotik->setUserStatus($customer->name, true);
+        // Re-enable in Mikrotik if isolated (Wrapped in try-catch to prevent crash)
+        try {
+            $this->mikrotik->setUserStatus($customer->name, true);
+        } catch (\Exception $e) {
+            \Log::warning("Manual Pay: Mikrotik sync failed for {$customer->name}");
+        }
 
-        // Send Receipt via WA
-        $this->whatsapp->sendMessage($customer->whatsapp, "Terima kasih! Pembayaran tagihan internet sebesar Rp " . number_format($customer->billing_amount, 0, ',', '.') . " telah diterima. Layanan Anda aktif hingga " . $customer->due_date->format('d M Y') . ".");
+        // Send Receipt via WA (Wrapped in try-catch to prevent crash)
+        try {
+            $this->whatsapp->sendMessage($customer->whatsapp, "Terima kasih! Pembayaran tagihan internet sebesar Rp " . number_format($customer->billing_amount, 0, ',', '.') . " telah diterima. Layanan Anda aktif hingga " . $customer->due_date->format('d M Y') . ".");
+        } catch (\Exception $e) {
+            \Log::warning("Manual Pay: WhatsApp receipt failed for {$customer->name}");
+        }
 
         return response()->json([
             'success' => true,
