@@ -109,7 +109,23 @@ class TransactionController extends Controller
                     $this->mikrotik->setUserStatus($customer->name, true);
 
                     // Send WA Receipt
-                    $this->wa->sendMessage($customer->whatsapp, "Terima kasih! Pembayaran tagihan internet sebesar Rp " . number_format($customer->billing_amount, 0, ',', '.') . " melalui portal pembayaran telah berhasil. Layanan Anda aktif hingga " . $customer->due_date->format('d M Y') . ".");
+                    $date = Carbon::now()->format('d/m/Y');
+                    $msg = "✅ *PEMBAYARAN DITERIMA*\n\n" .
+                           "Halo *{$customer->name}*,\n" .
+                           "Pembayaran tagihan internet telah kami terima.\n\n" .
+                           "💳 *Total:* Rp " . number_format($customer->billing_amount, 0, ',', '.') . "\n" .
+                           "📅 *Tanggal:* {$date}\n" .
+                           "💼 *Metode:* {$request->payment_type} (Portal Online)\n" .
+                           "🆔 *Order ID:* {$request->order_id}\n\n" .
+                           "✅ *Status Layanan: AKTIF*\n" .
+                           "Jika internet belum terhubung, silakan:\n" .
+                           "* Logout & Login ulang\n" .
+                           "* Restart Modem/ONT\n\n" .
+                           "Terima kasih! 🙏\n\n" .
+                           "Hormat kami,\n" .
+                           "*ND-Hotspot* 💡";
+
+                    $this->wa->sendMessage($customer->whatsapp, $msg);
                 }
             }
             return response()->json(['message' => 'OK']);
@@ -169,12 +185,18 @@ class TransactionController extends Controller
                 $transaction->voucher_id = $voucher->id;
                 
                 // Send WA
-                $msg = "Terima kasih! Pembayaran Anda berhasil.\n\n" .
-                       "Detail Voucher ND-HOTSPOT:\n" .
-                       "Kode: *{$voucher->code}*\n" .
-                       "Paket: {$transaction->plan->name}\n" .
-                       "Durasi: {$transaction->plan->duration}\n\n" .
-                       "Silakan hubungkan ke WiFi ND-HOTSPOT dan masukkan kode di atas. Selamat internetan!";
+                $msg = "🎫 *VOUCHER INTERNET – ND-Hotspot*\n" .
+                       env('APP_URL') . "\n\n" .
+                       "Halo Pelanggan,\n" .
+                       "Paket: *{$transaction->plan->name}*\n" .
+                       "Harga: Rp " . number_format($transaction->amount, 0, ',', '.') . "\n" .
+                       "Kode: *{$voucher->code}*\n\n" .
+                       "Cara Login:\n" .
+                       "* Pastikan sinyal Wifi *ND-Hotspot* tercover\n" .
+                       "* Pilih sinyal Wifi *ND-Hotspot*\n" .
+                       "* Masukkan kode Voucher\n\n" .
+                       "Hormat kami,\n" .
+                       "*ND-Hotspot* 💡";
                 
                 $this->wa->sendMessage($transaction->customer_phone, $msg);
                 

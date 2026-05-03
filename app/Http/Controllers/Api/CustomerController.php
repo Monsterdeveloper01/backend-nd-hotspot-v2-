@@ -93,9 +93,25 @@ class CustomerController extends Controller
             \Log::warning("Manual Pay: Mikrotik sync failed for {$customer->name}");
         }
 
-        // Send Receipt via WA (Wrapped in try-catch to prevent crash)
         try {
-            $this->whatsapp->sendMessage($customer->whatsapp, "Terima kasih! Pembayaran tagihan internet sebesar Rp " . number_format($customer->billing_amount, 0, ',', '.') . " telah diterima. Layanan Anda aktif hingga " . $customer->due_date->format('d M Y') . ".");
+            $date = $customer->updated_at->format('d/m/Y');
+            $time = time();
+            $msg = "✅ *PEMBAYARAN DITERIMA*\n\n" .
+                   "Halo *{$customer->name}*,\n" .
+                   "Pembayaran tagihan internet telah kami terima.\n\n" .
+                   "💳 *Total:* Rp " . number_format($customer->billing_amount, 0, ',', '.') . "\n" .
+                   "📅 *Tanggal:* {$date}\n" .
+                   "💼 *Metode:* Cash (Manual Admin)\n" .
+                   "🆔 *Order ID:* MANUAL-BILL-{$customer->id}-{$time}\n\n" .
+                   "✅ *Status Layanan: AKTIF*\n" .
+                   "Jika internet belum terhubung, silakan:\n" .
+                   "* Logout & Login ulang\n" .
+                   "* Restart Modem/ONT\n\n" .
+                   "Terima kasih! 🙏\n\n" .
+                   "Hormat kami,\n" .
+                   "*ND-Hotspot* 💡";
+            
+            $this->whatsapp->sendMessage($customer->whatsapp, $msg);
         } catch (\Exception $e) {
             \Log::warning("Manual Pay: WhatsApp receipt failed for {$customer->name}");
         }

@@ -57,9 +57,13 @@ class MikrotikService
             'status-autorefresh' => '1m',
         ];
 
-        // If duration is provided (e.g. 7h), set session-timeout
-        if ($data['duration']) {
+        // If duration is provided (e.g. 7h), set session-timeout and countdown script
+        if ($data['duration'] && $data['duration'] !== '0') {
             $params['session-timeout'] = $data['duration'];
+            
+            // Logic: On first login (uptime=0), create a scheduler to delete the user after [duration]
+            // This ensures "Real Time Countdown" even if the user logs out.
+            $params['on-login'] = ":if (\$uptime = 0s) do={ /system scheduler add name=\$user interval={$data['duration']} on-event=\"/ip hotspot user remove [find name=\$user]; /system scheduler remove [find name=\$user]\" }";
         }
 
         $result = $this->client->comm('/ip/hotspot/user/profile/add', $params);
@@ -92,10 +96,12 @@ class MikrotikService
             'shared-users' => (string)$data['shared_users'],
         ];
 
-        if ($data['duration']) {
+        if ($data['duration'] && $data['duration'] !== '0') {
             $params['session-timeout'] = $data['duration'];
+            $params['on-login'] = ":if (\$uptime = 0s) do={ /system scheduler add name=\$user interval={$data['duration']} on-event=\"/ip hotspot user remove [find name=\$user]; /system scheduler remove [find name=\$user]\" }";
         } else {
             $params['session-timeout'] = '00:00:00'; // No limit
+            $params['on-login'] = "";
         }
 
         $result = $this->client->comm('/ip/hotspot/user/profile/set', $params);

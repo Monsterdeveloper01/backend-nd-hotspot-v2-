@@ -35,7 +35,25 @@ class CheckCustomerBilling extends Command
         $h1Customers = Customer::whereDate('due_date', $tomorrow)->get();
         foreach ($h1Customers as $customer) {
             if ($customer->status_bayar === 'unpaid') {
-                $msg = "Halo {$customer->name}, tagihan internet Anda sebesar Rp " . number_format($customer->billing_amount, 0, ',', '.') . " akan jatuh tempo BESOK ({$customer->due_date->format('d M Y')}). Mohon segera melakukan pembayaran agar layanan tidak terputus.";
+                $msg = "Hallo *{$customer->name}*, pelanggan ND-Hotspot 👋\n\n" .
+                       "Terima kasih telah setia menggunakan layanan internet kami.\n" .
+                       "Kami ingin mengingatkan bahwa tagihan bulanan Anda akan jatuh tempo *BESOK* (" . $customer->due_date->format('d/m/Y') . ") dengan total: *Rp " . number_format($customer->billing_amount, 0, ',', '.') . "*\n\n" .
+                       "Mohon segera lakukan pembayaran agar layanan internet tetap lancar dan tidak terisolir otomatis.\n\n" .
+                       "*CARA PEMBAYARAN:*\n" .
+                       "Silakan akses link di bawah ini:\n" .
+                       "👉 " . env('FRONTEND_URL', 'https://nd-hotpot.net') . "/payment\n" .
+                       "-> Masukan username\n" .
+                       "–> Otomatis keluar nama pelanggan\n" .
+                       "–> Pilih bayar \n" .
+                       "–> Bayar sekarang \n" .
+                       "–> Pilih metode pembayaran (Gopay, Virtual Account atau QRIS)\n" .
+                       "Setelah pembayaran selesai otomatis system mengirim bukti pembayaran ke WA pelanggan\n\n" .
+                       "Abaikan pesan ini jika Anda sudah melakukan pembayaran.\n\n" .
+                       "Pesan ini dikirim otomatis oleh sistem.\n" .
+                       "Jika anda mengalami kesulitan silahkan hubungi\n" .
+                       "Admin: 0812-9588-587\n\n" .
+                       "Hormat kami,\n" .
+                       "*ND-Hotspot* 💡";
                 $this->whatsapp->sendMessage($customer->whatsapp, $msg);
             }
         }
@@ -43,7 +61,26 @@ class CheckCustomerBilling extends Command
         // 1. WhatsApp Reminders (H)
         $dueToday = Customer::whereDate('due_date', $today)->where('status_bayar', 'unpaid')->get();
         foreach ($dueToday as $customer) {
-            $this->whatsapp->sendMessage($customer->whatsapp, "Halo {$customer->name}, tagihan internet Anda sebesar Rp " . number_format($customer->billing_amount, 0, ',', '.') . " jatuh tempo hari ini. Mohon segera melakukan pembayaran agar layanan tetap aktif.");
+            $msg = "Hallo *{$customer->name}*, pelanggan ND-Hotspot 👋\n\n" .
+                   "Terima kasih telah setia menggunakan layanan internet kami.\n" .
+                   "Kami ingin mengingatkan bahwa tagihan bulanan Anda *JATUH TEMPO HARI INI* dengan total: *Rp " . number_format($customer->billing_amount, 0, ',', '.') . "*\n\n" .
+                   "Mohon segera lakukan pembayaran agar layanan internet tetap lancar dan tidak terisolir otomatis.\n\n" .
+                   "*CARA PEMBAYARAN:*\n" .
+                   "Silakan akses link di bawah ini:\n" .
+                   "👉 " . env('FRONTEND_URL', 'https://nd-hotpot.net') . "/payment\n" .
+                   "-> Masukan username\n" .
+                   "–> Otomatis keluar nama pelanggan\n" .
+                   "–> Pilih bayar \n" .
+                   "–> Bayar sekarang \n" .
+                   "–> Pilih metode pembayaran (Gopay, Virtual Account atau QRIS)\n" .
+                   "Setelah pembayaran selesai otomatis system mengirim bukti pembayaran ke WA pelanggan\n\n" .
+                   "Abaikan pesan ini jika Anda sudah melakukan pembayaran.\n\n" .
+                   "Pesan ini dikirim otomatis oleh sistem.\n" .
+                   "Jika anda mengalami kesulitan silahkan hubungi\n" .
+                   "Admin: 0812-9588-587\n\n" .
+                   "Hormat kami,\n" .
+                   "*ND-Hotspot* 💡";
+            $this->whatsapp->sendMessage($customer->whatsapp, $msg);
         }
 
         // 2. Isolate on H+2 (If still unpaid)
@@ -61,7 +98,16 @@ class CheckCustomerBilling extends Command
             $customer->is_isolated = true;
             $customer->save();
 
-            $this->whatsapp->sendMessage($customer->whatsapp, "Halo {$customer->name}, layanan internet Anda telah dinonaktifkan sementara karena keterlambatan pembayaran. Silakan lunasi tagihan Anda untuk mengaktifkan kembali layanan.");
+            $msg = "🚫 *LAYANAN TERISOLIR*\n\n" .
+                   "Hallo *{$customer->name}*,\n" .
+                   "Mohon maaf, layanan internet Anda telah *DINONAKTIFKAN SEMENTARA* karena keterlambatan pembayaran tagihan sebesar *Rp " . number_format($customer->billing_amount, 0, ',', '.') . "*\n\n" .
+                   "Silakan segera lakukan pembayaran untuk mengaktifkan kembali layanan Anda secara otomatis.\n\n" .
+                   "*CARA PEMBAYARAN:*\n" .
+                   "👉 " . env('FRONTEND_URL', 'https://nd-hotpot.net') . "/payment\n\n" .
+                   "Hubungi Admin: 0812-9588-587\n\n" .
+                   "Hormat kami,\n" .
+                   "*ND-Hotspot* 💡";
+            $this->whatsapp->sendMessage($customer->whatsapp, $msg);
         }
 
         // 3. Telegram Report (The new requirement)
