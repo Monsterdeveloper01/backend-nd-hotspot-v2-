@@ -269,6 +269,25 @@ class MikrotikService
         return is_array($active) ? $active : [];
     }
 
+    public function updateUserProfile($username, $profile)
+    {
+        if (!$this->connectInternal()) return false;
+        
+        $users = $this->client->comm('/ip/hotspot/user/print', [
+            '.proplist' => '.id',
+            '?name' => $username
+        ]);
+        
+        if (is_array($users) && !empty($users) && isset($users[0]['.id'])) {
+            $this->client->comm('/ip/hotspot/user/set', [
+                '.id' => $users[0]['.id'],
+                'profile' => $profile
+            ]);
+        }
+        
+        $this->client->disconnect();
+    }
+
     public function removeHotspotUser($username)
     {
         return $this->deleteUser($username);
