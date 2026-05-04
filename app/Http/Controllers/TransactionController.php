@@ -290,11 +290,15 @@ class TransactionController extends Controller
                                     ->first();
 
         if (!$transaction || !$transaction->voucher) {
+            \Log::warning('POLLING VOUCHER NOT FOUND YET', ['order_id' => $orderId]);
             return response()->json(['message' => 'Voucher not found or payment pending'], 404);
         }
 
+        // Response disesuaikan dengan yang diminta Frontend (voucher_code)
         return response()->json([
             'success' => true,
+            'voucher_code' => $transaction->voucher->code, // Sesuaikan dengan Frontend
+            'voucher_id' => $transaction->voucher->id,
             'voucher' => $transaction->voucher,
             'plan' => $transaction->plan,
             'transaction' => $transaction
