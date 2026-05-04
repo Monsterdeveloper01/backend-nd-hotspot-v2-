@@ -107,48 +107,69 @@ class TransactionController extends Controller
         }
 
         // Handle Customer Billing Payment
-        if (str_starts_with($request->order_id, 'BILL-')) {
+        if (str_starts_with($orderId, 'BILL-')) {
+            \Log::info('PROCESSING BILL PAYMENT', ['order_id' => $orderId]);
+            
             if ($request->transaction_status == 'settlement' || $request->transaction_status == 'capture') {
-                $parts = explode('-', $request->order_id);
+                $parts = explode('-', $orderId);
                 $customerId = $parts[1];
                 $customer = Customer::find($customerId);
                 
-                if ($customer && $customer->status_bayar !== 'paid') {
+                if (!$customer) {
+                    \Log::error('CUSTOMER NOT FOUND', ['id' => $customerId]);
+                    return response()->json(['message' => 'Customer not found'], 404);
+                }
+
+                \Log::info('CUSTOMER FOUND', ['name' => $customer->name, 'status' => $customer->status_bayar]);
+
+                if ($customer->status_bayar !== 'paid') {
                     $customer->status_bayar = 'paid';
                     $customer->is_isolated = false;
-                    $customer->due_date = Carbon::parse($customer->due_date)->addMonth();
+                    $customer->due_date = \Carbon\Carbon::parse($customer->due_date)->addMonth();
                     $customer->save();
 
-                    // Record to Transactions Table for Accounting/Dashboard
+                    \Log::info('CUSTOMER UPDATED IN DB', ['name' => $customer->name]);
+
+                    // Record to Transactions Table
                     Transaction::create([
-                        'external_id' => $request->order_id,
+                        'external_id' => $orderId,
                         'customer_phone' => $customer->whatsapp,
                         'amount' => $request->gross_amount,
                         'status' => 'success',
-                        'voucher_plan_id' => null, // Bill payment doesn't have a specific voucher plan
+                        'voucher_plan_id' => null,
                     ]);
 
+                    \Log::info('TRANSACTION RECORD CREATED');
+
                     // Re-enable in Mikrotik
-                    $this->mikrotik->setUserStatus($customer->name, true);
+                    $mikrotikResult = $this->mikrotik->setUserStatus($customer->name, true);
+                    \Log::info('MIKROTIK SYNC RESULT', ['success' => $mikrotikResult]);
 
                     // Send WA Receipt
-                    $date = Carbon::now()->format('d/m/Y');
-                    $msg = "✅ *PEMBAYARAN DITERIMA*\n\n" .
-                           "Halo *{$customer->name}*,\n" .
-                           "Pembayaran tagihan internet telah kami terima.\n\n" .
-                           "💳 *Total:* Rp " . number_format($customer->billing_amount, 0, ',', '.') . "\n" .
-                           "📅 *Tanggal:* {$date}\n" .
-                           "💼 *Metode:* {$request->payment_type} (Portal Online)\n" .
-                           "🆔 *Order ID:* {$request->order_id}\n\n" .
-                           "✅ *Status Layanan: AKTIF*\n" .
-                           "Jika internet belum terhubung, silakan:\n" .
-                           "* Logout & Login ulang\n" .
-                           "* Restart Modem/ONT\n\n" .
-                           "Terima kasih! 🙏\n\n" .
-                           "Hormat kami,\n" .
-                           "*ND-Hotspot* 💡";
+                    try {
+                        $date = \Carbon\Carbon::now()->format('d/m/Y');
+                        $msg = "✅ *PEMBAYARAN DITERIMA*\n\n" .
+                               "Halo *{$customer->name}*,\n" .
+                               "Pembayaran tagihan internet telah kami terima.\n\n" .
+                               "💳 *Total:* Rp " . number_format($customer->billing_amount, 0, ',', '.') . "\n" .
+                               "📅 *Tanggal:* {$date}\n" .
+                               "💼 *Metode:* {$request->payment_type} (Portal Online)\n" .
+                               "🆔 *Order ID:* {$orderId}\n\n" .
+                               "✅ *Status Layanan: AKTIF*\n" .
+                               "Jika internet belum terhubung, silakan:\n" .
+                               "* Logout & Login ulang\n" .
+                               "* Restart Modem/ONT\n\n" .
+                               "Terima kasih! 🙏\n\n" .
+                               "Hormat kami,\n" .
+                               "*ND-Hotspot* 💡";
 
-                    $this->wa->sendMessage($customer->whatsapp, $msg);
+                        $this->wa->sendMessage($customer->whatsapp, $msg);
+                        \Log::info('WA RECEIPT SENT');
+                    } catch (\Exception $e) {
+                        \Log::error('WA SEND FAILED', ['error' => $e->getMessage()]);
+                    }
+                } else {
+                    \Log::warning('CUSTOMER ALREADY PAID, SKIPPING LOGIC', ['name' => $customer->name]);
                 }
             }
             return response()->json(['message' => 'OK']);
