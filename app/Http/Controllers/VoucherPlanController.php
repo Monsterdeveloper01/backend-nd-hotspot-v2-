@@ -23,7 +23,7 @@ class VoucherPlanController extends Controller
             $query->where('is_gaming', $request->is_gaming == 'true' || $request->is_gaming == 1);
         }
 
-        return response()->json($query->get());
+        return response()->json($query->orderBy('price', 'asc')->get());
     }
 
     public function store(Request $request)
