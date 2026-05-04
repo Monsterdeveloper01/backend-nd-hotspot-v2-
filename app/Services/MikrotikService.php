@@ -120,12 +120,12 @@ public function setUserStatus($username, $enabled)
         // 3. Eksekusi perubahan status
         $response = $this->client->comm('/ip/hotspot/user/set', [
             '.id' => $id,
-            'disabled' => $enabled ? 'false' : 'true'
+            'disabled' => $enabled ? 'no' : 'yes'
         ]);
 
         // Cek apakah perintah pengubahan status ditolak router
-        if (isset($response['message'])) {
-            Log::error("Mikrotik API Error (Set Status Gagal): " . $response['message']);
+        if (isset($response['type']) && $response['type'] === '!trap') {
+            Log::error("Mikrotik API Error (Set Status Gagal): " . ($response['message'] ?? 'Unknown Error'));
             $this->disconnect();
             return false;
         }
@@ -137,7 +137,6 @@ public function setUserStatus($username, $enabled)
 
         // 4. Bersihkan Sesi Aktif & Cookies
         if ($enabled) {
-            // Kita bungkus di try-catch tambahan agar jika gagal hapus cookie, proses utamanya tetap sukses
             try {
                 $this->clearUserActiveSessions($username);
                 $this->clearUserCookies($username);
@@ -201,7 +200,6 @@ public function setUserStatus($username, $enabled)
 
     public function updateProfile($data)
     {
-        // Placeholder agar tidak error
         return true;
     }
 
@@ -212,17 +210,15 @@ public function setUserStatus($username, $enabled)
         $username = trim($username);
         \Log::info("Mikrotik: Mencoba menghapus user {$username}");
 
-        // 1. Coba cari langsung
+        // 1. Cari user
         $users = $this->client->comm('/ip/hotspot/user/print', [
             '?name' => $username
         ]);
 
-        // 2. Jika tidak ketemu, cari manual (case-insensitive)
-        if (empty($users) || !is_array($users)) {
+        if (empty($users) || !is_array($users) || !isset($users[0])) {
             $allUsers = $this->client->comm('/ip/hotspot/user/print');
             $searchName = strtolower($username);
             $users = [];
-            
             if (is_array($allUsers)) {
                 foreach ($allUsers as $u) {
                     if (strtolower(trim($u['name'] ?? '')) === $searchName) {
@@ -239,17 +235,25 @@ public function setUserStatus($username, $enabled)
             return false;
         }
 
+        $success = true;
         foreach ($users as $u) {
             if (isset($u['.id'])) {
                 $res = $this->client->comm('/ip/hotspot/user/remove', [
                     '.id' => $u['.id']
                 ]);
-                \Log::info("Mikrotik: User {$username} dihapus. Result: " . json_encode($res));
+                
+                // Cek trap/error
+                if (isset($res['type']) && $res['type'] === '!trap') {
+                    \Log::error("Mikrotik: Gagal hapus user {$username}. Pesan: " . ($res['message'] ?? 'Unknown Error'));
+                    $success = false;
+                } else {
+                    \Log::info("Mikrotik: User {$username} (ID: {$u['.id']}) berhasil dihapus.");
+                }
             }
         }
         
         $this->disconnect();
-        return true;
+        return $success;
     }
 
     public function clearUserActiveSessions($username)
