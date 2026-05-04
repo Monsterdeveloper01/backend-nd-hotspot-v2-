@@ -190,19 +190,42 @@ class VoucherController extends Controller
     }
 
     /**
+     * Get active vouchers directly from Mikrotik sessions
+     */
+    public function activeVouchers()
+    {
+        try {
+            $activeUsers = $this->mikrotik->getActiveUsers();
+            if (!is_array($activeUsers)) $activeUsers = [];
+            
+            // 1. Sync stale RadiusSessions
+            $activeMikrotikUsernames = collect($activeUsers)->pluck('user')->toArray();
+            \App\Models\RadiusSession::where('is_active', true)
+                ->whereNotIn('username', $activeMikrotikUsernames)
+                ->update(['is_active' => false, 'stopped_at' => now()]);
+
+            $this->syncVoucherUsage($activeUsers);
+
+            $sessions = \App\Models\RadiusSession::where('is_active', true)
+                ->orderBy('started_at', 'desc')
+                ->get();
+
+            return response()->json($sessions);
+        } catch (\Exception $e) {
+            \Log::error("Active Vouchers Error: " . $e->getMessage());
+            return response()->json(['error' => 'Gagal sinkronisasi user aktif: ' . $e->getMessage()], 500);
+        }
+    }
+
+    /**
      * Sync Mikrotik /ip/hotspot/active with Local DB
      */
-    private function syncVoucherUsage()
+    private function syncVoucherUsage($activeUsers = null)
     {
-        $activeUsers = $this->mikrotik->getActiveUsers();
+        if ($activeUsers === null) $activeUsers = $this->mikrotik->getActiveUsers();
         
-        // 1. Sync stale RadiusSessions
-        $activeMikrotikUsernames = collect($activeUsers)->pluck('user')->toArray();
-        \App\Models\RadiusSession::where('is_active', true)
-            ->whereNotIn('username', $activeMikrotikUsernames)
-            ->update(['is_active' => false, 'stopped_at' => now()]);
-
         foreach ($activeUsers as $active) {
+            if (!is_array($active)) continue;
             $code = $active['user'] ?? null;
             if (!$code) continue;
 
