@@ -125,7 +125,7 @@
         </div>
         <h1>Oops! Sepertinya Kamu Tersesat</h1>
         <p>Anda telah mencapai <b>Secure Private Gateway</b> ND-Hotspot. Halaman ini diproteksi dan hanya digunakan untuk komunikasi antar sistem.</p>
-        <a href="https://nd-hotspot.net" class="btn">
+        <a href="https://nd-hostpot.net" class="btn">
             Kembali ke Beranda
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"></line><polyline points="12 5 19 12 12 19"></polyline></svg>
         </a>

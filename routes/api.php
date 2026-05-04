@@ -89,6 +89,9 @@ Route::get('/test', function () {
 });
 
 // Fallback: Jika akses route API yang tidak ada atau akses lewat browser sembarangan
-Route::any('{any}', function () {
+Route::any('{any}', function (Illuminate\Http\Request $request) {
+    if ($request->expectsJson()) {
+        return response()->json(['message' => 'Endpoint not found'], 404);
+    }
     return view('welcome');
 })->where('any', '.*');
