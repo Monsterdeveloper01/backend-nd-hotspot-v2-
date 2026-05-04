@@ -71,15 +71,40 @@ class VoucherController extends Controller
     public function activeVouchers()
     {
         try {
-            // 1. Sync usage (mark as used if they just logged in, cleanup expired, etc)
+            // 1. Get fresh Active Users list from Mikrotik for online status
+            $mikrotikActive = $this->mikrotik->getActiveUsers();
+            if (!is_array($mikrotikActive)) $mikrotikActive = [];
+            
+            // Create a lookup map for faster checking
+            $activeMap = [];
+            foreach ($mikrotikActive as $session) {
+                if (isset($session['user'])) {
+                    $activeMap[strtolower(trim($session['user']))] = $session;
+                }
+            }
+
+            // 2. Sync usage (mark as used if they just logged in, cleanup expired, etc)
             $this->syncVoucherUsage();
 
-            // 2. Get vouchers that are currently active (status used and not expired)
-            return Voucher::with('plan')
+            // 3. Get vouchers that are currently active (status used and not expired)
+            $vouchers = Voucher::with('plan')
                 ->where('status', 'used')
                 ->where('expires_at', '>', now())
                 ->orderBy('used_at', 'desc')
                 ->get();
+
+            // 4. Map is_online status and update MAC if online
+            $vouchers->each(function($v) use ($activeMap) {
+                $code = strtolower(trim($v->code));
+                $v->is_online = isset($activeMap[$code]);
+                
+                // Optionally update MAC address from live session
+                if ($v->is_online && isset($activeMap[$code]['mac-address'])) {
+                    $v->mac_address = $activeMap[$code]['mac-address'];
+                }
+            });
+
+            return response()->json($vouchers);
         } catch (\Exception $e) {
             \Log::error("Error in activeVouchers: " . $e->getMessage());
             return response()->json([
