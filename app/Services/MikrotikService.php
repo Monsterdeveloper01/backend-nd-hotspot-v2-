@@ -241,21 +241,26 @@ class MikrotikService
         $this->client->disconnect();
     }
 
-    public function checkUserExists($username)
+    public function getUserStatus($username)
     {
-        // Fail fast if we know router is offline
-        if (!$this->connect()) return false;
-        
-        // Re-connect for actual check (since previous connect() was cached and disconnected)
-        if (!$this->connectInternal()) return false;
+        if (!$this->connect()) return ['exists' => false, 'enabled' => false];
+        if (!$this->connectInternal()) return ['exists' => false, 'enabled' => false];
         
         $users = $this->client->comm('/ip/hotspot/user/print', [
-            '.proplist' => 'name',
+            '.proplist' => 'name,disabled',
             '?name' => $username
         ]);
         
         $this->client->disconnect();
-        return !empty($users);
+
+        if (empty($users)) {
+            return ['exists' => false, 'enabled' => false];
+        }
+
+        return [
+            'exists' => true,
+            'enabled' => $users[0]['disabled'] === 'false' || $users[0]['disabled'] === false
+        ];
     }
 
     public function getActiveUsers()

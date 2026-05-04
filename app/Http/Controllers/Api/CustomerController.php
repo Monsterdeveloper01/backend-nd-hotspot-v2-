@@ -52,8 +52,10 @@ class CustomerController extends Controller
         $isMikrotikAlive = $this->mikrotik->connect();
 
         $customers->getCollection()->transform(function ($customer) use ($isMikrotikAlive) {
-            // Check sync status with Mikrotik (limited to paginated results)
-            $customer->is_synced = $isMikrotikAlive ? $this->mikrotik->checkUserExists($customer->name) : false;
+            // Check detailed status with Mikrotik
+            $status = $isMikrotikAlive ? $this->mikrotik->getUserStatus($customer->name) : ['exists' => false, 'enabled' => false];
+            $customer->is_synced = $status['exists'];
+            $customer->mikrotik_enabled = $status['enabled'];
             return $customer;
         });
         
@@ -76,7 +78,9 @@ class CustomerController extends Controller
     public function show($id)
     {
         $customer = Customer::findOrFail($id);
-        $customer->is_synced = $this->mikrotik->checkUserExists($customer->name);
+        $status = $this->mikrotik->getUserStatus($customer->name);
+        $customer->is_synced = $status['exists'];
+        $customer->mikrotik_enabled = $status['enabled'];
         return response()->json($customer);
     }
 
