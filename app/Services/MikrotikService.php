@@ -4,10 +4,6 @@ namespace App\Services;
 
 use Illuminate\Support\Facades\Log;
 
-/**
- * Mikrotik Service - Powered by PEAR2-style API logic
- * Stabil untuk ROS v6 dan v7
- */
 class MikrotikService
 {
     protected $client;
@@ -16,11 +12,11 @@ class MikrotikService
     public function __construct()
     {
         $this->config = [
-            'host' => env('MIKROTIK_HOST', '101.255.208.150'),
-            'user' => env('MIKROTIK_USERNAME', 'admin'),
-            'pass' => env('MIKROTIK_PASSWORD', 'karambia1686'),
-            'port' => (int)env('MIKROTIK_PORT', 8728),
-            'timeout' => 15,
+            'host'     => env('MIKROTIK_HOST', '101.255.208.150'),
+            'user'     => env('MIKROTIK_USERNAME', 'admin'),
+            'pass'     => env('MIKROTIK_PASSWORD', 'karambia1686'),
+            'port'     => (int) env('MIKROTIK_PORT', 8728),
+            'timeout'  => 15,
         ];
     }
 
@@ -38,10 +34,19 @@ class MikrotikService
         return true;
     }
 
+    public function disconnect()
+    {
+        if ($this->client) {
+            $this->client->disconnect();
+            $this->client = null;
+        }
+    }
+
     public function getAllHotspotUsers()
     {
         if (!$this->connect()) return [];
         $users = $this->client->comm('/ip/hotspot/user/print');
+        $this->disconnect();
         return is_array($users) ? $users : [];
     }
 
@@ -49,6 +54,7 @@ class MikrotikService
     {
         if (!$this->connect()) return [];
         $active = $this->client->comm('/ip/hotspot/active/print');
+        $this->disconnect();
         return is_array($active) ? $active : [];
     }
 
@@ -60,9 +66,17 @@ class MikrotikService
             '?name' => $username
         ]);
 
-        if (empty($users)) return false;
+        if (empty($users)) {
+            $this->disconnect();
+            return false;
+        }
 
-        $id = $users[0]['.id'];
+        $id = $users[0]['.id'] ?? null;
+        if (!$id) {
+            $this->disconnect();
+            return false;
+        }
+
         $this->client->comm('/ip/hotspot/user/set', [
             '.id' => $id,
             'disabled' => $enabled ? 'no' : 'yes'
@@ -72,6 +86,7 @@ class MikrotikService
             $this->kickUser($username);
         }
 
+        $this->disconnect();
         return true;
     }
 
@@ -83,45 +98,54 @@ class MikrotikService
         ]);
 
         foreach ($active as $a) {
-            $this->client->comm('/ip/hotspot/active/remove', [
-                '.id' => $a['.id']
-            ]);
+            if (isset($a['.id'])) {
+                $this->client->comm('/ip/hotspot/active/remove', [
+                    '.id' => $a['.id']
+                ]);
+            }
         }
+        $this->disconnect();
         return true;
     }
 
     public function createUser($data)
     {
         if (!$this->connect()) return false;
-        return $this->client->comm('/ip/hotspot/user/add', [
-            'name' => $data['username'],
+        $result = $this->client->comm('/ip/hotspot/user/add', [
+            'name'     => $data['username'],
             'password' => $data['password'] ?? '',
-            'profile' => $data['profile'] ?? 'default',
-            'comment' => $data['comment'] ?? 'Created by ND Hotspot'
+            'profile'  => $data['profile'] ?? 'default',
+            'comment'  => $data['comment'] ?? 'Created by ND Hotspot'
         ]);
+        $this->disconnect();
+        return $result;
     }
 }
 
 /**
- * RouterosAPI - THE OFFICIAL WIKI VERSION (MOST STABLE)
+ * RouterosAPI - FIXED VERSION
  */
-class RouterosAPI {
-    var $debug = false;
-    var $connected = false;
-    var $port = 8728;
-    var $timeout = 10;
-    var $attempts = 1;
-    var $delay = 0;
+class RouterosAPI
+{
+    var $debug      = false;
+    var $connected  = false;
+    var $port       = 8728;
+    var $timeout    = 10;
+    var $attempts   = 1;
+    var $delay      = 0;
     var $socket;
     var $error_no;
     var $error_str;
 
-    function connect($host, $user, $pass, $port = 8728) {
+    function connect($host, $user, $pass, $port = 8728)
+    {
         $this->host = $host;
         $this->user = $user;
         $this->pass = $pass;
         $this->port = $port;
+
         $this->socket = @fsockopen($this->host, $this->port, $this->error_no, $this->error_str, $this->timeout);
+
         if ($this->socket) {
             socket_set_timeout($this->socket, $this->timeout);
             if ($this->login($this->user, $this->pass)) {
@@ -133,57 +157,109 @@ class RouterosAPI {
         return false;
     }
 
-    function login($user, $pass) {
+    function disconnect()
+    {
+        if ($this->socket) {
+            fclose($this->socket);
+        }
+        $this->connected = false;
+        $this->socket = null;
+    }
+
+    function login($user, $pass)
+    {
         $this->write('/login', false);
         $this->write('=name=' . $user, false);
-        $this->write('=password=' . $pass);
+        $this->write('=password=' . $pass, true);  // ← true = kirim terminator
         $res = $this->read(false);
+
         if (isset($res[0]) && $res[0] == '!done') {
             if (isset($res[1]) && strpos($res[1], '=ret=') === 0) {
+                // Pre-v6.43 challenge response
                 $challenge = substr($res[1], 5);
                 $md5 = md5(chr(0) . $pass . pack('H*', $challenge));
+
                 $this->write('/login', false);
                 $this->write('=name=' . $user, false);
-                $this->write('=response=00' . $md5);
+                $this->write('=response=00' . $md5, true);
                 $res2 = $this->read(false);
-                if (isset($res2[0]) && $res2[0] == '!done') return true;
-            } else {
-                return true;
-            }
-        }
-        return false;
-    }
 
-    function comm($com, $args = array()) {
-        $this->write($com, false);
-        foreach ($args as $key => $value) {
-            $this->write('=' . $key . '=' . $value, false);
-        }
-        $this->write($com, true);
-        return $this->read();
-    }
-
-    function write($command, $param2 = true) {
-        if ($command) {
-            $data = explode("\n", $command);
-            foreach ($data as $com) {
-                $com = trim($com);
-                $this->encode_length(strlen($com));
-                fwrite($this->socket, $com);
+                if (isset($res2[0]) && $res2[0] == '!done') {
+                    return true;
+                }
+                return false;
             }
-            if ($param2) fwrite($this->socket, chr(0));
+            // Post v6.43 plain auth
             return true;
         }
         return false;
     }
 
-    function read($parse = true) {
+    /**
+     * 🔧 FIX: Kirim command sekali, lalu terminator chr(0)
+     */
+    function comm($com, $args = array())
+    {
+        if (!$this->connected) return false;
+
+        $this->write($com, false);
+
+        foreach ($args as $key => $value) {
+            $this->write('=' . $key . '=' . $value, false);
+        }
+
+        // Kirim terminator untuk menandakan end of command
+        fwrite($this->socket, chr(0));
+
+        return $this->read();
+    }
+
+    function write($command, $terminate = false)
+    {
+        if ($command) {
+            $com = trim($command);
+            $this->encode_length(strlen($com));
+            fwrite($this->socket, $com);
+
+            if ($terminate) {
+                fwrite($this->socket, chr(0));
+            }
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * 🔧 FIX: Handle timeout & pastikan baca sampai !done
+     */
+    function read($parse = true)
+    {
         $res = array();
+        $nullCount = 0;
+
         while (true) {
             $length = $this->decode_length();
+
             if ($length > 0) {
-                $res[] = fread($this->socket, $length);
-            } elseif ($length == 0) {
+                $line = fread($this->socket, $length);
+
+                // 🔧 Cek kalau fread return kosong (timeout/putus)
+                if ($line === false || $line === '') {
+                    break;
+                }
+
+                $res[] = $line;
+
+                // Kalau sudah !done, baca terminating zero lalu break
+                if ($line === '!done') {
+                    $this->decode_length(); // baca terminating 0x00
+                    break;
+                }
+            } elseif ($length === 0) {
+                // Terminating zero
+                break;
+            } else {
+                // Error/invalid length
                 break;
             }
         }
@@ -191,35 +267,78 @@ class RouterosAPI {
         if ($parse) {
             $parsed = array();
             $current = null;
+
             foreach ($res as $line) {
-                if ($line == '!re' || $line == '!trap' || $line == '!done') {
+                if ($line === '!re' || $line === '!trap' || $line === '!done') {
                     $current = array('type' => $line);
-                    $parsed[] = &$current;
-                } elseif (substr($line, 0, 1) == '=') {
+                    $parsed[] = $current;
+                } elseif (substr($line, 0, 1) === '=') {
                     $pos = strpos($line, '=', 1);
-                    $current[substr($line, 1, $pos - 1)] = substr($line, $pos + 1);
+                    if ($pos !== false) {
+                        $key = substr($line, 1, $pos - 1);
+                        $val = substr($line, $pos + 1);
+                        $current[$key] = $val;
+                    } else {
+                        $current[substr($line, 1)] = '';
+                    }
                 }
             }
-            return $parsed;
+
+            // Hapus !done dari hasil, return hanya data !re
+            $result = array();
+            foreach ($parsed as $p) {
+                if ($p['type'] === '!re') {
+                    unset($p['type']);
+                    $result[] = $p;
+                }
+            }
+            return $result;
+        }
+
+        return $res;
+    }
+
+    function encode_length($length)
+    {
+        if ($length < 0x80) {
+            fwrite($this->socket, chr($length));
+        } elseif ($length < 0x4000) {
+            fwrite($this->socket, chr(($length >> 8) | 0x80) . chr($length & 0xff));
+        } elseif ($length < 0x200000) {
+            fwrite($this->socket, chr(($length >> 16) | 0xc0) . chr(($length >> 8) & 0xff) . chr($length & 0xff));
+        } elseif ($length < 0x10000000) {
+            fwrite($this->socket, chr(($length >> 24) | 0xe0) . chr(($length >> 16) & 0xff) . chr(($length >> 8) & 0xff) . chr($length & 0xff));
         } else {
-            return $res;
+            fwrite($this->socket, chr(0xf0) . chr(($length >> 24) & 0xff) . chr(($length >> 16) & 0xff) . chr(($length >> 8) & 0xff) . chr($length & 0xff));
         }
     }
 
-    function encode_length($length) {
-        if ($length < 0x80) fwrite($this->socket, chr($length));
-        elseif ($length < 0x4000) fwrite($this->socket, chr(($length >> 8) | 0x80) . chr($length & 0xff));
-        elseif ($length < 0x200000) fwrite($this->socket, chr(($length >> 16) | 0xc0) . chr(($length >> 8) & 0xff) . chr($length & 0xff));
-        elseif ($length < 0x10000000) fwrite($this->socket, chr(($length >> 24) | 0xe0) . chr(($length >> 16) & 0xff) . chr(($length >> 8) & 0xff) . chr($length & 0xff));
-        else fwrite($this->socket, chr(0xf0) . chr(($length >> 24) & 0xff) . chr(($length >> 16) & 0xff) . chr(($length >> 8) & 0xff) . chr($length & 0xff));
-    }
+    function decode_length()
+    {
+        $byte = @fread($this->socket, 1);
+        if ($byte === false || $byte === '') return 0;
 
-    function decode_length() {
-        $byte = ord(fread($this->socket, 1));
-        if (($byte & 0x80) == 0x00) return $byte;
-        if (($byte & 0xc0) == 0x80) return (($byte & 0x3f) << 8) + ord(fread($this->socket, 1));
-        if (($byte & 0xe0) == 0xc0) return (($byte & 0x1f) << 16) + (ord(fread($this->socket, 1)) << 8) + ord(fread($this->socket, 1));
-        if (($byte & 0xf0) == 0xe0) return (($byte & 0x0f) << 24) + (ord(fread($this->socket, 1)) << 16) + (ord(fread($this->socket, 1)) << 8) + ord(fread($this->socket, 1));
+        $byte = ord($byte);
+
+        if (($byte & 0x80) == 0x00) {
+            return $byte;
+        } elseif (($byte & 0xc0) == 0x80) {
+            $next = @fread($this->socket, 1);
+            if ($next === false) return 0;
+            return (($byte & 0x3f) << 8) + ord($next);
+        } elseif (($byte & 0xe0) == 0xc0) {
+            $next = @fread($this->socket, 2);
+            if ($next === false || strlen($next) < 2) return 0;
+            return (($byte & 0x1f) << 16) + (ord($next[0]) << 8) + ord($next[1]);
+        } elseif (($byte & 0xf0) == 0xe0) {
+            $next = @fread($this->socket, 3);
+            if ($next === false || strlen($next) < 3) return 0;
+            return (($byte & 0x0f) << 24) + (ord($next[0]) << 16) + (ord($next[1]) << 8) + ord($next[2]);
+        } elseif (($byte & 0xf8) == 0xf0) {
+            $next = @fread($this->socket, 4);
+            if ($next === false || strlen($next) < 4) return 0;
+            return (ord($next[0]) << 24) + (ord($next[1]) << 16) + (ord($next[2]) << 8) + ord($next[3]);
+        }
         return 0;
     }
 }
