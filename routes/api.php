@@ -17,6 +17,7 @@ Route::get('/router-status', function (App\Services\MikrotikService $mikrotik) {
 Route::get('/voucher-plans', [VoucherPlanController::class, 'index']);
 Route::post('/checkout', [TransactionController::class, 'checkout']);
 Route::get('/transaction-status/{id}', [TransactionController::class, 'status']);
+Route::get('/transactions/{id}', [TransactionController::class, 'status']); // Tambahkan ini agar cocok dengan Frontend
 Route::post('/midtrans-callback', [TransactionController::class, 'callback']);
 
 Route::middleware('auth:sanctum')->group(function () {
