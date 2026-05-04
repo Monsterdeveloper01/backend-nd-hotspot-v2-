@@ -4,6 +4,10 @@ namespace App\Services;
 
 use Illuminate\Support\Facades\Log;
 
+/**
+ * Mikrotik Service - Powered by PEAR2-style API logic
+ * Stabil untuk ROS v6 dan v7
+ */
 class MikrotikService
 {
     protected $client;
@@ -16,7 +20,7 @@ class MikrotikService
             'user' => env('MIKROTIK_USERNAME', 'admin'),
             'pass' => env('MIKROTIK_PASSWORD', 'karambia1686'),
             'port' => (int)env('MIKROTIK_PORT', 8728),
-            'timeout' => 15, // Memberi nafas lebih panjang untuk 160+ user
+            'timeout' => 15,
         ];
     }
 
@@ -52,7 +56,6 @@ class MikrotikService
     {
         if (!$this->connect()) return false;
 
-        // Cari user by name
         $users = $this->client->comm('/ip/hotspot/user/print', [
             '?name' => $username
         ]);
@@ -97,35 +100,31 @@ class MikrotikService
             'comment' => $data['comment'] ?? 'Created by ND Hotspot'
         ]);
     }
-    
-    public function deleteUser($username)
-    {
-        if (!$this->connect()) return false;
-        $users = $this->client->comm('/ip/hotspot/user/print', [
-            '?name' => $username
-        ]);
-        if (empty($users)) return false;
-
-        return $this->client->comm('/ip/hotspot/user/remove', [
-            '.id' => $users[0]['.id']
-        ]);
-    }
 }
 
 /**
- * RouterosAPI Standalone Class
- * Dioptimasi untuk ROS v7 (Paging & Sentence Handling)
+ * RouterosAPI - THE OFFICIAL WIKI VERSION (MOST STABLE)
  */
 class RouterosAPI {
+    var $debug = false;
     var $connected = false;
+    var $port = 8728;
+    var $timeout = 10;
+    var $attempts = 1;
+    var $delay = 0;
     var $socket;
-    var $timeout = 15;
+    var $error_no;
+    var $error_str;
 
     function connect($host, $user, $pass, $port = 8728) {
-        $this->socket = @fsockopen($host, $port, $errNo, $errStr, $this->timeout);
+        $this->host = $host;
+        $this->user = $user;
+        $this->pass = $pass;
+        $this->port = $port;
+        $this->socket = @fsockopen($this->host, $this->port, $this->error_no, $this->error_str, $this->timeout);
         if ($this->socket) {
             socket_set_timeout($this->socket, $this->timeout);
-            if ($this->login($user, $pass)) {
+            if ($this->login($this->user, $this->pass)) {
                 $this->connected = true;
                 return true;
             }
@@ -147,9 +146,10 @@ class RouterosAPI {
                 $this->write('=name=' . $user, false);
                 $this->write('=response=00' . $md5);
                 $res2 = $this->read(false);
-                return (isset($res2[0]) && $res2[0] == '!done');
+                if (isset($res2[0]) && $res2[0] == '!done') return true;
+            } else {
+                return true;
             }
-            return true;
         }
         return false;
     }
@@ -164,37 +164,46 @@ class RouterosAPI {
     }
 
     function write($command, $param2 = true) {
-        $com = trim($command);
-        $this->encode_length(strlen($com));
-        fwrite($this->socket, $com);
-        if ($param2) fwrite($this->socket, chr(0));
+        if ($command) {
+            $data = explode("\n", $command);
+            foreach ($data as $com) {
+                $com = trim($com);
+                $this->encode_length(strlen($com));
+                fwrite($this->socket, $com);
+            }
+            if ($param2) fwrite($this->socket, chr(0));
+            return true;
+        }
+        return false;
     }
 
     function read($parse = true) {
-        $parsed = array();
-        $current = null;
-        $done = false;
-        while (!$done) {
+        $res = array();
+        while (true) {
             $length = $this->decode_length();
             if ($length > 0) {
-                $line = fread($this->socket, $length);
+                $res[] = fread($this->socket, $length);
+            } elseif ($length == 0) {
+                break;
+            }
+        }
+
+        if ($parse) {
+            $parsed = array();
+            $current = null;
+            foreach ($res as $line) {
                 if ($line == '!re' || $line == '!trap' || $line == '!done') {
-                    if ($line == '!done') $done = true;
                     $current = array('type' => $line);
                     $parsed[] = &$current;
                 } elseif (substr($line, 0, 1) == '=') {
                     $pos = strpos($line, '=', 1);
-                    if ($pos !== false) {
-                        $current[substr($line, 1, $pos - 1)] = substr($line, $pos + 1);
-                    }
+                    $current[substr($line, 1, $pos - 1)] = substr($line, $pos + 1);
                 }
-            } elseif ($length == 0) {
-                if ($done) break;
-            } else {
-                break; // Socket closed
             }
+            return $parsed;
+        } else {
+            return $res;
         }
-        return $parse ? $parsed : array_map(function($a){return $a['type']??$a;}, $parsed);
     }
 
     function encode_length($length) {
@@ -206,9 +215,7 @@ class RouterosAPI {
     }
 
     function decode_length() {
-        $c = fread($this->socket, 1);
-        if ($c === false || $c === "") return -1;
-        $byte = ord($c);
+        $byte = ord(fread($this->socket, 1));
         if (($byte & 0x80) == 0x00) return $byte;
         if (($byte & 0xc0) == 0x80) return (($byte & 0x3f) << 8) + ord(fread($this->socket, 1));
         if (($byte & 0xe0) == 0xc0) return (($byte & 0x1f) << 16) + (ord(fread($this->socket, 1)) << 8) + ord(fread($this->socket, 1));
