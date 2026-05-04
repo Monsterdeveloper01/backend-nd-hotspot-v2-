@@ -58,7 +58,7 @@ class MikrotikService
         return is_array($active) ? $active : [];
     }
 
-    public function setUserStatus($username, $enabled)
+public function setUserStatus($username, $enabled)
     {
         if (!$this->connect()) {
             Log::error("Mikrotik: Gagal koneksi saat mencoba " . ($enabled ? "enable" : "disable") . " user {$username}");
@@ -92,9 +92,6 @@ class MikrotikService
             return false;
         }
 
-        // Debug: Log the user object to see why .id might be missing
-        Log::info("Mikrotik: User found for {$username}", ['user_data' => $users[0]]);
-
         $id = $users[0]['.id'] ?? $users[0]['id'] ?? null;
         if (!$id) {
             Log::error("Mikrotik: ID user {$username} tidak ditemukan dalam data: " . json_encode($users[0]));
@@ -102,19 +99,27 @@ class MikrotikService
             return false;
         }
 
-        // 3. Eksekusi perubahan status
+        // 3. Eksekusi perubahan status (Ganti 'no' / 'yes' menjadi 'false' / 'true')
         $response = $this->client->comm('/ip/hotspot/user/set', [
             '.id' => $id,
-            'disabled' => $enabled ? 'no' : 'yes'
+            'disabled' => $enabled ? 'false' : 'true' 
         ]);
 
         Log::info("Mikrotik: Hasil set status untuk {$username} (ID: {$id}): " . json_encode($response));
 
-        if (!$enabled) {
+        // Putus koneksi sebentar untuk mencegah bentrok socket, karena fungsi di bawah memiliki open/close koneksi sendiri
+        $this->disconnect();
+
+        // 4. Bersihkan Active Session & Cookies
+        if ($enabled) {
+            // Jika di-enable, hapus sesi lamanya supaya device otomatis login dengan akses internet
+            $this->clearUserActiveSessions($username);
+            $this->clearUserCookies($username);
+        } else {
+            // Jika di-disable (isolir), kick dari jaringan
             $this->kickUser($username);
         }
 
-        $this->disconnect();
         return true;
     }
 
