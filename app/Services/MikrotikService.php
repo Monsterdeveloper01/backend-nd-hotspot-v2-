@@ -274,6 +274,14 @@ class MikrotikService
         return is_array($users) ? $users : [];
     }
 
+    public function comm($path, $params = [])
+    {
+        if (!$this->connectInternal()) return [];
+        $result = $this->client->comm($path, $params);
+        $this->client->disconnect();
+        return $result;
+    }
+
     public function getActiveUsers()
     {
         if (!$this->connect()) return [];
