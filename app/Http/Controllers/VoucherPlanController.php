@@ -30,6 +30,7 @@ class VoucherPlanController extends Controller
     {
         $validated = $request->validate([
             'name' => 'required|string|unique:voucher_plans,name',
+            'mikrotik_profile' => 'nullable|string',
             'is_gaming' => 'boolean',
             'duration' => 'nullable|string',
             'upload_limit' => 'nullable|string',
@@ -38,12 +39,16 @@ class VoucherPlanController extends Controller
             'price' => 'integer|min:0',
         ]);
 
+        // If mikrotik_profile is not provided, use a slugified version of name
+        if (empty($validated['mikrotik_profile'])) {
+            $validated['mikrotik_profile'] = str_replace(' ', '-', $validated['name']);
+        }
+
         // 1. Create in Mikrotik first
         $mikrotikResult = $this->mikrotik->createProfile($validated);
 
         // 2. Save to Database
         $plan = VoucherPlan::create($validated);
-        $plan->update(['mikrotik_profile' => $validated['name']]);
 
         return response()->json([
             'message' => 'Master Voucher berhasil dibuat' . ($mikrotikResult ? ' dan sinkron ke Mikrotik' : ' (Gagal sinkron ke Mikrotik)'),
@@ -58,6 +63,7 @@ class VoucherPlanController extends Controller
         
         $validated = $request->validate([
             'name' => 'required|string|unique:voucher_plans,name,' . $id,
+            'mikrotik_profile' => 'nullable|string',
             'is_gaming' => 'boolean',
             'duration' => 'nullable|string',
             'upload_limit' => 'nullable|string',
@@ -66,14 +72,17 @@ class VoucherPlanController extends Controller
             'price' => 'integer|min:0',
         ]);
 
-        $oldName = $plan->name;
+        $oldProfileName = $plan->mikrotik_profile ?: $plan->name;
+
+        if (empty($validated['mikrotik_profile'])) {
+            $validated['mikrotik_profile'] = str_replace(' ', '-', $validated['name']);
+        }
 
         // 1. Sync to Mikrotik
-        $mikrotikResult = $this->mikrotik->updateProfile($oldName, $validated);
+        $mikrotikResult = $this->mikrotik->updateProfile($oldProfileName, $validated);
 
         // 2. Update Database
         $plan->update($validated);
-        $plan->update(['mikrotik_profile' => $validated['name']]);
 
         return response()->json([
             'message' => 'Master Voucher berhasil diupdate' . ($mikrotikResult ? ' dan sinkron ke Mikrotik' : ' (Gagal sinkron ke Mikrotik)'),
@@ -103,7 +112,7 @@ class VoucherPlanController extends Controller
         }
 
         // Remove from Mikrotik
-        $this->mikrotik->deleteProfile($plan->name);
+        $this->mikrotik->deleteProfile($plan->mikrotik_profile ?: $plan->name);
         
         $plan->delete();
 

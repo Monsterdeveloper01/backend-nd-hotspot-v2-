@@ -48,10 +48,17 @@ class MikrotikService
         if (!$this->connectInternal()) return false;
 
         // Mikrotik format: name, rate-limit (rx/tx), session-timeout, shared-users
-        $rateLimit = ($data['upload_limit'] ?: '0') . '/' . ($data['download_limit'] ?: '0');
+        $uLimit = $data['upload_limit'] ?: '0';
+        $dLimit = $data['download_limit'] ?: '0';
+
+        // Auto-append 'M' if input is purely numeric
+        if (is_numeric($uLimit)) $uLimit .= 'M';
+        if (is_numeric($dLimit)) $dLimit .= 'M';
+
+        $rateLimit = $uLimit . '/' . $dLimit;
         
         $params = [
-            'name' => $data['name'],
+            'name' => $data['mikrotik_profile'] ?? $data['name'],
             'rate-limit' => $rateLimit,
             'shared-users' => (string)$data['shared_users'],
             'status-autorefresh' => '1m',
@@ -87,11 +94,17 @@ class MikrotikService
             return $this->createProfile($data);
         }
 
-        $rateLimit = ($data['upload_limit'] ?: '0') . '/' . ($data['download_limit'] ?: '0');
+        $uLimit = $data['upload_limit'] ?: '0';
+        $dLimit = $data['download_limit'] ?: '0';
+
+        if (is_numeric($uLimit)) $uLimit .= 'M';
+        if (is_numeric($dLimit)) $dLimit .= 'M';
+
+        $rateLimit = $uLimit . '/' . $dLimit;
         
         $params = [
             '.id' => $profiles[0]['.id'],
-            'name' => $data['name'],
+            'name' => $data['mikrotik_profile'] ?? $data['name'],
             'rate-limit' => $rateLimit,
             'shared-users' => (string)$data['shared_users'],
         ];
