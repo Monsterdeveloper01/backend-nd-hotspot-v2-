@@ -2,478 +2,198 @@
 
 namespace App\Services;
 
-/**
- * Lightweight RouterOS API Client
- */
+use RouterOS\Client;
+use RouterOS\Query;
+use Illuminate\Support\Facades\Log;
+
 class MikrotikService
 {
-    private $client;
-    private $host;
-    private $user;
-    private $pass;
-    private $port;
+    protected $client;
+    protected $config;
 
     public function __construct()
     {
-        $this->host = env('MIKROTIK_HOST');
-        $this->user = env('MIKROTIK_USERNAME');
-        $this->pass = env('MIKROTIK_PASSWORD');
-        $this->port = env('MIKROTIK_PORT', 8728);
+        $this->config = [
+            'host' => env('MIKROTIK_HOST', '101.255.208.150'),
+            'user' => env('MIKROTIK_USERNAME', 'admin'),
+            'pass' => env('MIKROTIK_PASSWORD', 'karambia1686'),
+            'port' => (int)env('MIKROTIK_PORT', 8728),
+            'timeout' => 60, // Sesuai V1 yang stabil
+        ];
     }
 
+    /**
+     * Membuka koneksi ke Mikrotik
+     */
     public function connect()
     {
-        // Use cache to prevent blocking on every request if router is offline
-        return \Illuminate\Support\Facades\Cache::remember('mikrotik_connected', 30, function () {
-            $this->client = new \App\Services\RouterosAPI();
-            $this->client->debug = false;
-            $connected = $this->client->connect($this->host, $this->user, $this->pass, $this->port);
-            if ($connected) {
-                $this->client->disconnect();
-                return true;
-            }
+        try {
+            $this->client = new Client($this->config);
+            return true;
+        } catch (\Exception $e) {
+            Log::error("Mikrotik Connect Error: " . $e->getMessage());
+            $this->client = null;
             return false;
-        });
-    }
-
-    private function connectInternal()
-    {
-        $this->client = new \App\Services\RouterosAPI();
-        $this->client->debug = false;
-        return $this->client->connect($this->host, $this->user, $this->pass, $this->port);
-    }
-
-    public function createProfile($data)
-    {
-        if (!$this->connectInternal()) return false;
-
-        // Mikrotik format: name, rate-limit (rx/tx), session-timeout, shared-users
-        $uLimit = $data['upload_limit'] ?: '0';
-        $dLimit = $data['download_limit'] ?: '0';
-
-        // Auto-append 'M' if input is purely numeric
-        if (is_numeric($uLimit)) $uLimit .= 'M';
-        if (is_numeric($dLimit)) $dLimit .= 'M';
-
-        $rateLimit = $uLimit . '/' . $dLimit;
-        
-        $params = [
-            'name' => $data['mikrotik_profile'] ?? $data['name'],
-            'rate-limit' => $rateLimit,
-            'shared-users' => (string)$data['shared_users'],
-            'status-autorefresh' => '1m',
-        ];
-
-        // If duration is provided (e.g. 7h), set session-timeout and countdown script
-        if ($data['duration'] && $data['duration'] !== '0') {
-            $params['session-timeout'] = $data['duration'];
-            
-            // Logic: On first login (uptime=0), create a scheduler to delete the user after [duration]
-            // This ensures "Real Time Countdown" even if the user logs out.
-            $params['on-login'] = ":if (\$uptime = 0s) do={ /system scheduler add name=\$user interval={$data['duration']} on-event=\"/ip hotspot user remove [find name=\$user]; /system scheduler remove [find name=\$user]\" }";
         }
-
-        $result = $this->client->comm('/ip/hotspot/user/profile/add', $params);
-        $this->client->disconnect();
-
-        return $result;
-    }
-    
-    public function updateProfile($oldName, $data)
-    {
-        if (!$this->connectInternal()) return false;
-        
-        // Find ID first
-        $profiles = $this->client->comm('/ip/hotspot/user/profile/print', [
-            '.proplist' => '.id',
-            '?name' => $oldName
-        ]);
-        
-        if (!is_array($profiles) || empty($profiles) || !isset($profiles[0]['.id'])) {
-            // Profile doesn't exist on router? Try creating it instead (Self-Healing)
-            return $this->createProfile($data);
-        }
-
-        $uLimit = $data['upload_limit'] ?: '0';
-        $dLimit = $data['download_limit'] ?: '0';
-
-        if (is_numeric($uLimit)) $uLimit .= 'M';
-        if (is_numeric($dLimit)) $dLimit .= 'M';
-
-        $rateLimit = $uLimit . '/' . $dLimit;
-        
-        $params = [
-            '.id' => $profiles[0]['.id'],
-            'name' => $data['mikrotik_profile'] ?? $data['name'],
-            'rate-limit' => $rateLimit,
-            'shared-users' => (string)$data['shared_users'],
-        ];
-
-        if ($data['duration'] && $data['duration'] !== '0') {
-            $params['session-timeout'] = $data['duration'];
-            $params['on-login'] = ":if (\$uptime = 0s) do={ /system scheduler add name=\$user interval={$data['duration']} on-event=\"/ip hotspot user remove [find name=\$user]; /system scheduler remove [find name=\$user]\" }";
-        } else {
-            $params['session-timeout'] = '00:00:00'; // No limit
-            $params['on-login'] = "";
-        }
-
-        $result = $this->client->comm('/ip/hotspot/user/profile/set', $params);
-        $this->client->disconnect();
-
-        return $result;
     }
 
-    public function deleteProfile($name)
-    {
-        if (!$this->connectInternal()) return false;
-        
-        // Find ID first
-        $profiles = $this->client->comm('/ip/hotspot/user/profile/print', [
-            '.proplist' => '.id',
-            '?name' => $name
-        ]);
-        
-        if (is_array($profiles) && !empty($profiles) && isset($profiles[0]['.id'])) {
-            $this->client->comm('/ip/hotspot/user/profile/remove', [
-                '.id' => $profiles[0]['.id']
-            ]);
-        }
-        
-        $this->client->disconnect();
-    }
-
-    public function createUser($data)
-    {
-        if (!$this->connectInternal()) return false;
-
-        $params = [
-            'name' => $data['username'], // Voucher Code
-            'password' => $data['password'] ?? '',
-            'profile' => $data['profile'], // Master Voucher Name
-            'comment' => $data['comment'] ?? 'Auto-generated by NDBilling',
-            'limit-uptime' => $data['limit_uptime'] ?? '0'
-        ];
-
-        $result = $this->client->comm('/ip/hotspot/user/add', $params);
-        $this->client->disconnect();
-
-        return $result;
-    }
-
-    public function deleteUser($username)
-    {
-        if (!$this->connectInternal()) return false;
-        
-        $users = $this->client->comm('/ip/hotspot/user/print', [
-            '.proplist' => '.id',
-            '?name' => $username
-        ]);
-        
-        if (is_array($users) && !empty($users) && isset($users[0]['.id'])) {
-            $this->client->comm('/ip/hotspot/user/remove', [
-                '.id' => $users[0]['.id']
-            ]);
-        }
-        
-        $this->client->disconnect();
-    }
-
-    public function setUserStatus($username, $enabled)
-    {
-        if (!$this->connectInternal()) return false;
-        
-        $users = $this->client->comm('/ip/hotspot/user/print', [
-            '.proplist' => '.id',
-            '?name' => $username
-        ]);
-        
-        if (is_array($users) && !empty($users) && isset($users[0]['.id'])) {
-            $this->client->comm('/ip/hotspot/user/set', [
-                '.id' => $users[0]['.id'],
-                'disabled' => $enabled ? 'no' : 'yes'
-            ]);
-        }
-        
-        $this->client->disconnect();
-    }
-
-    public function clearUserActiveSessions($username)
-    {
-        if (!$this->connectInternal()) return false;
-        
-        $sessions = $this->client->comm('/ip/hotspot/active/print', [
-            '.proplist' => '.id',
-            '?user' => $username
-        ]);
-        
-        if (is_array($sessions)) {
-            foreach ($sessions as $session) {
-                if (isset($session['.id'])) {
-                    $this->client->comm('/ip/hotspot/active/remove', [
-                        '.id' => $session['.id']
-                    ]);
-                }
-            }
-        }
-        
-        $this->client->disconnect();
-    }
-
-    public function clearUserCookies($username)
-    {
-        if (!$this->connectInternal()) return false;
-        
-        $cookies = $this->client->comm('/ip/hotspot/cookie/print', [
-            '.proplist' => '.id',
-            '?user' => $username
-        ]);
-        
-        if (is_array($cookies)) {
-            foreach ($cookies as $cookie) {
-                if (isset($cookie['.id'])) {
-                    $this->client->comm('/ip/hotspot/cookie/remove', [
-                        '.id' => $cookie['.id']
-                    ]);
-                }
-            }
-        }
-        
-        $this->client->disconnect();
-    }
-
-    public function getUserStatus($username)
-    {
-        if (!$this->connect()) return ['exists' => false, 'enabled' => false];
-        if (!$this->connectInternal()) return ['exists' => false, 'enabled' => false];
-        
-        $users = $this->client->comm('/ip/hotspot/user/print', [
-            '.proplist' => 'name,disabled',
-            '?name' => $username
-        ]);
-        
-        $this->client->disconnect();
-
-        if (empty($users)) {
-            return ['exists' => false, 'enabled' => false];
-        }
-
-        return [
-            'exists' => true,
-            'enabled' => ($users[0]['disabled'] === 'false' || $users[0]['disabled'] === false)
-        ];
-    }
-
+    /**
+     * Ambil Semua User Hotspot (Bulk)
+     */
     public function getAllHotspotUsers()
     {
-        if (!$this->connect()) return [];
-        if (!$this->connectInternal()) return [];
-        
-        // Use .proplist for smaller response & faster processing
-        $users = $this->client->comm('/ip/hotspot/user/print', [
-            '.proplist' => 'name,disabled'
-        ]);
-        
-        $this->client->disconnect();
-        return is_array($users) ? $users : [];
+        if (!$this->client && !$this->connect()) return [];
+
+        try {
+            $query = new Query('/ip/hotspot/user/print');
+            return $this->client->query($query)->read();
+        } catch (\Exception $e) {
+            Log::error("Mikrotik GetAllUsers Error: " . $e->getMessage());
+            return [];
+        }
     }
 
-    public function comm($path, $params = [])
-    {
-        if (!$this->connectInternal()) return [];
-        $result = $this->client->comm($path, $params);
-        $this->client->disconnect();
-        return $result;
-    }
-
+    /**
+     * Ambil User yang Sedang Online
+     */
     public function getActiveUsers()
     {
-        if (!$this->connect()) return [];
-        if (!$this->connectInternal()) return [];
-        
-        $active = $this->client->comm('/ip/hotspot/active/print');
-        
-        $this->client->disconnect();
-        return is_array($active) ? $active : [];
+        if (!$this->client && !$this->connect()) return [];
+
+        try {
+            $query = new Query('/ip/hotspot/active/print');
+            return $this->client->query($query)->read();
+        } catch (\Exception $e) {
+            Log::error("Mikrotik GetActiveUsers Error: " . $e->getMessage());
+            return [];
+        }
     }
 
+    /**
+     * Set Status User (Enable/Disable)
+     */
+    public function setUserStatus($username, $enabled)
+    {
+        if (!$this->client && !$this->connect()) return false;
+
+        try {
+            // Cari ID user berdasarkan nama
+            $query = (new Query('/ip/hotspot/user/print'))
+                ->where('name', $username);
+            $user = $this->client->query($query)->read();
+
+            if (empty($user)) return false;
+
+            $id = $user[0]['.id'];
+
+            // Update status
+            $update = (new Query('/ip/hotspot/user/set'))
+                ->equal('.id', $id)
+                ->equal('disabled', $enabled ? 'no' : 'yes');
+            $this->client->query($update)->read();
+
+            // Jika didisable, tendang dari active
+            if (!$enabled) {
+                $this->kickUser($username);
+            }
+
+            return true;
+        } catch (\Exception $e) {
+            Log::error("Mikrotik SetStatus Error: " . $e->getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * Tendang user dari daftar aktif
+     */
+    public function kickUser($username)
+    {
+        if (!$this->client && !$this->connect()) return false;
+
+        try {
+            $query = (new Query('/ip/hotspot/active/print'))
+                ->where('name', $username);
+            $active = $this->client->query($query)->read();
+
+            foreach ($active as $a) {
+                $remove = (new Query('/ip/hotspot/active/remove'))
+                    ->equal('.id', $a['.id']);
+                $this->client->query($remove)->read();
+            }
+            return true;
+        } catch (\Exception $e) {
+            return false;
+        }
+    }
+
+    /**
+     * Buat User Baru
+     */
+    public function createUser($data)
+    {
+        if (!$this->client && !$this->connect()) return false;
+
+        try {
+            $query = (new Query('/ip/hotspot/user/add'))
+                ->equal('name', $data['username'])
+                ->equal('password', $data['password'] ?? '')
+                ->equal('profile', $data['profile'] ?? 'default')
+                ->equal('comment', $data['comment'] ?? 'Created by ND Hotspot');
+            
+            return $this->client->query($query)->read();
+        } catch (\Exception $e) {
+            Log::error("Mikrotik CreateUser Error: " . $e->getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * Update Profile User
+     */
     public function updateUserProfile($username, $profile)
     {
-        if (!$this->connectInternal()) return false;
-        
-        $users = $this->client->comm('/ip/hotspot/user/print', [
-            '.proplist' => '.id',
-            '?name' => $username
-        ]);
-        
-        if (is_array($users) && !empty($users) && isset($users[0]['.id'])) {
-            $this->client->comm('/ip/hotspot/user/set', [
-                '.id' => $users[0]['.id'],
-                'profile' => $profile
-            ]);
-        }
-        
-        $this->client->disconnect();
-    }
+        if (!$this->client && !$this->connect()) return false;
 
-    public function removeHotspotUser($username)
-    {
-        return $this->deleteUser($username);
-    }
-}
+        try {
+            $query = (new Query('/ip/hotspot/user/print'))
+                ->where('name', $username);
+            $user = $this->client->query($query)->read();
 
-/**
- * Basic RouterOS API Class
- */
-class RouterosAPI {
-    var $debug = false;
-    var $connected = false;
-    var $port = 8728;
-    var $timeout = 10;      // Increased to 10 seconds for large responses
-    var $attempts = 2;      // Increased attempts
-    var $delay = 2;
-    var $socket;
-    var $error_no;
-    var $error_str;
+            if (empty($user)) return false;
 
-    function connect($host, $user, $pass, $port = 8728) {
-        if (!$host) return false;
-        
-        $this->socket = @fsockopen($host, $port, $this->error_no, $this->error_str, $this->timeout);
-        if ($this->socket) {
-            socket_set_timeout($this->socket, $this->timeout);
-            if ($this->login($user, $pass)) {
-                $this->connected = true;
-                return true;
-            }
-            fclose($this->socket);
-        }
-        return false;
-    }
-
-    function disconnect() {
-        if ($this->socket) fclose($this->socket);
-        $this->connected = false;
-    }
-
-    function login($user, $pass) {
-        // RouterOS v6.43+ and v7+ authentication process
-        $this->write('/login', false);
-        $this->write('=name=' . $user, false);
-        $this->write('=password=' . $pass);
-        $res = $this->read(false);
-
-        if (isset($res[0]) && $res[0] == '!done') {
-            // Check if it's the pre-6.43 challenge response
-            if (isset($res[1]) && strpos($res[1], '=ret=') === 0) {
-                $challenge = substr($res[1], 5);
-                $md5 = md5(chr(0) . $pass . pack('H*', $challenge));
-                
-                $this->write('/login', false);
-                $this->write('=name=' . $user, false);
-                $this->write('=response=00' . $md5);
-                $res2 = $this->read(false);
-                
-                if (isset($res2[0]) && $res2[0] == '!done') {
-                    return true;
-                }
-                return false;
-            }
+            $update = (new Query('/ip/hotspot/user/set'))
+                ->equal('.id', $user[0]['.id'])
+                ->equal('profile', $profile);
             
-            // Post 6.43+ successful plain auth
+            $this->client->query($update)->read();
             return true;
+        } catch (\Exception $e) {
+            return false;
         }
-        
-        return false;
     }
 
-    function comm($com, $args = array()) {
-        if (!$this->connected) return false;
-        $this->write($com, false);
-        foreach ($args as $key => $value) {
-            $this->write('=' . $key . '=' . $value, false);
-        }
-        $this->write($com, true);
-        return $this->read();
-    }
+    /**
+     * Hapus User
+     */
+    public function deleteUser($username)
+    {
+        if (!$this->client && !$this->connect()) return false;
 
-    function write($command, $param2 = true) {
-        if ($command) {
-            $data = explode("\n", $command);
-            foreach ($data as $com) {
-                $com = trim($com);
-                $this->encode_length(strlen($com));
-                fwrite($this->socket, $com);
-            }
-            if ($param2) fwrite($this->socket, chr(0));
+        try {
+            $query = (new Query('/ip/hotspot/user/print'))
+                ->where('name', $username);
+            $user = $this->client->query($query)->read();
+
+            if (empty($user)) return false;
+
+            $remove = (new Query('/ip/hotspot/user/remove'))
+                ->equal('.id', $user[0]['.id']);
+            
+            $this->client->query($remove)->read();
             return true;
+        } catch (\Exception $e) {
+            return false;
         }
-        return false;
-    }
-
-    function read($parse = true) {
-        $parsed = array();
-        $current = null;
-        $res = array();
-
-        while (true) {
-            $length = $this->decode_length();
-            if ($length > 0) {
-                $line = fread($this->socket, $length);
-                $res[] = $line;
-                
-                if ($line == '!re' || $line == '!trap' || $line == '!done') {
-                    $current = array('type' => $line);
-                    $parsed[] = &$current;
-                } elseif (substr($line, 0, 1) == '=') {
-                    $pos = strpos($line, '=', 1);
-                    if ($pos !== false) {
-                        $current[substr($line, 1, $pos - 1)] = substr($line, $pos + 1);
-                    } else {
-                        $current[substr($line, 1)] = '';
-                    }
-                }
-                
-                // If we got !done, we are almost finished
-                if ($line == '!done') {
-                    // Read the terminating empty word
-                    $this->decode_length();
-                    break;
-                }
-            } elseif ($length == 0) {
-                break;
-            }
-        }
-        
-        return $parse ? $parsed : $res;
-    }
-
-    function encode_length($length) {
-        if ($length < 0x80) {
-            fwrite($this->socket, chr($length));
-        } elseif ($length < 0x4000) {
-            fwrite($this->socket, chr(($length >> 8) | 0x80) . chr($length & 0xff));
-        } elseif ($length < 0x200000) {
-            fwrite($this->socket, chr(($length >> 16) | 0xc0) . chr(($length >> 8) & 0xff) . chr($length & 0xff));
-        } elseif ($length < 0x10000000) {
-            fwrite($this->socket, chr(($length >> 24) | 0xe0) . chr(($length >> 16) & 0xff) . chr(($length >> 8) & 0xff) . chr($length & 0xff));
-        } else {
-            fwrite($this->socket, chr(0xf0) . chr(($length >> 24) & 0xff) . chr(($length >> 16) & 0xff) . chr(($length >> 8) & 0xff) . chr($length & 0xff));
-        }
-    }
-
-    function decode_length() {
-        $byte = ord(fread($this->socket, 1));
-        if (($byte & 0x80) == 0x00) {
-            return $byte;
-        } elseif (($byte & 0xc0) == 0x80) {
-            return (($byte & 0x3f) << 8) + ord(fread($this->socket, 1));
-        } elseif (($byte & 0xe0) == 0xc0) {
-            return (($byte & 0x1f) << 16) + (ord(fread($this->socket, 1)) << 8) + ord(fread($this->socket, 1));
-        } elseif (($byte & 0xf0) == 0xe0) {
-            return (($byte & 0x0f) << 24) + (ord(fread($this->socket, 1)) << 16) + (ord(fread($this->socket, 1)) << 8) + ord(fread($this->socket, 1));
-        } elseif (($byte & 0xf8) == 0xf0) {
-            return (ord(fread($this->socket, 1)) << 24) + (ord(fread($this->socket, 1)) << 16) + (ord(fread($this->socket, 1)) << 8) + ord(fread($this->socket, 1));
-        }
-        return 0;
     }
 }
