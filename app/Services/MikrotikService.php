@@ -407,7 +407,8 @@ class RouterosAPI {
         return false;
     }
 
-    function read() {
+    function read($parse = true) {
+        $res = array();
         $parsed = array();
         $current = null;
         $done = false;
@@ -416,11 +417,11 @@ class RouterosAPI {
             $length = $this->decode_length();
             if ($length > 0) {
                 $line = fread($this->socket, $length);
+                $res[] = $line;
+                
                 if ($line == '!re' || $line == '!trap' || $line == '!done') {
                     $type = $line;
-                    if ($type == '!done') {
-                        $done = true;
-                    }
+                    if ($type == '!done') $done = true;
                     $current = array('type' => $type);
                     $parsed[] = &$current;
                 } elseif (substr($line, 0, 1) == '=') {
@@ -432,11 +433,11 @@ class RouterosAPI {
                     }
                 }
             } elseif ($length == 0) {
-                // End of sentence word
                 if ($done) break;
             }
         }
-        return $parsed;
+        
+        return $parse ? $parsed : $res;
     }
 
     function encode_length($length) {
