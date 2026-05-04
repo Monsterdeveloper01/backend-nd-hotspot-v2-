@@ -294,11 +294,15 @@ class TransactionController extends Controller
             return response()->json(['message' => 'Voucher not found or payment pending'], 404);
         }
 
-        // Response disesuaikan dengan yang diminta Frontend (voucher_code)
+        // Response dibuat super lengkap agar Frontend tidak error lagi
         return response()->json([
             'success' => true,
-            'voucher_code' => $transaction->voucher->code, // Sesuaikan dengan Frontend
+            'voucher_code' => $transaction->voucher->code, 
             'voucher_id' => $transaction->voucher->id,
+            'data' => [
+                'voucher_code' => $transaction->voucher->code,
+                'code' => $transaction->voucher->code,
+            ],
             'voucher' => $transaction->voucher,
             'plan' => $transaction->plan,
             'transaction' => $transaction
