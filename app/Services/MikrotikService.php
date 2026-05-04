@@ -16,54 +16,52 @@ class MikrotikService
             'user' => env('MIKROTIK_USERNAME', 'admin'),
             'pass' => env('MIKROTIK_PASSWORD', 'karambia1686'),
             'port' => (int)env('MIKROTIK_PORT', 8728),
-            'timeout' => 10, // Ditingkatkan untuk stabilitas
+            'timeout' => 15, // Memberi nafas lebih panjang untuk 160+ user
         ];
     }
 
-    private function getClient()
+    private function connect()
     {
         if (!$this->client) {
             $this->client = new RouterosAPI();
             $this->client->timeout = $this->config['timeout'];
             if (!$this->client->connect($this->config['host'], $this->config['user'], $this->config['pass'], $this->config['port'])) {
+                Log::error("Gagal terhubung ke MikroTik: " . $this->config['host']);
                 $this->client = null;
+                return false;
             }
         }
-        return $this->client;
+        return true;
     }
 
     public function getAllHotspotUsers()
     {
-        $client = $this->getClient();
-        if (!$client) return [];
-
-        // Mengambil data secara bulk tanpa proplist agar kompatibel dengan v7 jika data tidak terlalu besar
-        $users = $client->comm('/ip/hotspot/user/print');
+        if (!$this->connect()) return [];
+        $users = $this->client->comm('/ip/hotspot/user/print');
         return is_array($users) ? $users : [];
     }
 
     public function getActiveUsers()
     {
-        $client = $this->getClient();
-        if (!$client) return [];
-
-        $active = $client->comm('/ip/hotspot/active/print');
+        if (!$this->connect()) return [];
+        $active = $this->client->comm('/ip/hotspot/active/print');
         return is_array($active) ? $active : [];
     }
 
     public function setUserStatus($username, $enabled)
     {
-        $client = $this->getClient();
-        if (!$client) return false;
+        if (!$this->connect()) return false;
 
-        $users = $client->comm('/ip/hotspot/user/print', [
+        // Cari user by name
+        $users = $this->client->comm('/ip/hotspot/user/print', [
             '?name' => $username
         ]);
 
         if (empty($users)) return false;
 
-        $client->comm('/ip/hotspot/user/set', [
-            '.id' => $users[0]['.id'],
+        $id = $users[0]['.id'];
+        $this->client->comm('/ip/hotspot/user/set', [
+            '.id' => $id,
             'disabled' => $enabled ? 'no' : 'yes'
         ]);
 
@@ -76,15 +74,13 @@ class MikrotikService
 
     public function kickUser($username)
     {
-        $client = $this->getClient();
-        if (!$client) return false;
-
-        $active = $client->comm('/ip/hotspot/active/print', [
+        if (!$this->connect()) return false;
+        $active = $this->client->comm('/ip/hotspot/active/print', [
             '?name' => $username
         ]);
 
         foreach ($active as $a) {
-            $client->comm('/ip/hotspot/active/remove', [
+            $this->client->comm('/ip/hotspot/active/remove', [
                 '.id' => $a['.id']
             ]);
         }
@@ -93,27 +89,37 @@ class MikrotikService
 
     public function createUser($data)
     {
-        $client = $this->getClient();
-        if (!$client) return false;
-
-        return $client->comm('/ip/hotspot/user/add', [
+        if (!$this->connect()) return false;
+        return $this->client->comm('/ip/hotspot/user/add', [
             'name' => $data['username'],
             'password' => $data['password'] ?? '',
             'profile' => $data['profile'] ?? 'default',
             'comment' => $data['comment'] ?? 'Created by ND Hotspot'
         ]);
     }
+    
+    public function deleteUser($username)
+    {
+        if (!$this->connect()) return false;
+        $users = $this->client->comm('/ip/hotspot/user/print', [
+            '?name' => $username
+        ]);
+        if (empty($users)) return false;
+
+        return $this->client->comm('/ip/hotspot/user/remove', [
+            '.id' => $users[0]['.id']
+        ]);
+    }
 }
 
 /**
- * Class RouterosAPI
- * Versi stabil untuk ROS v6/v7
+ * RouterosAPI Standalone Class
+ * Dioptimasi untuk ROS v7 (Paging & Sentence Handling)
  */
 class RouterosAPI {
     var $connected = false;
     var $socket;
-    var $timeout = 10;
-    var $attempts = 1;
+    var $timeout = 15;
 
     function connect($host, $user, $pass, $port = 8728) {
         $this->socket = @fsockopen($host, $port, $errNo, $errStr, $this->timeout);
@@ -165,7 +171,6 @@ class RouterosAPI {
     }
 
     function read($parse = true) {
-        $res = array();
         $parsed = array();
         $current = null;
         $done = false;
@@ -173,7 +178,6 @@ class RouterosAPI {
             $length = $this->decode_length();
             if ($length > 0) {
                 $line = fread($this->socket, $length);
-                $res[] = $line;
                 if ($line == '!re' || $line == '!trap' || $line == '!done') {
                     if ($line == '!done') $done = true;
                     $current = array('type' => $line);
@@ -186,9 +190,11 @@ class RouterosAPI {
                 }
             } elseif ($length == 0) {
                 if ($done) break;
+            } else {
+                break; // Socket closed
             }
         }
-        return $parse ? $parsed : $res;
+        return $parse ? $parsed : array_map(function($a){return $a['type']??$a;}, $parsed);
     }
 
     function encode_length($length) {
@@ -200,7 +206,9 @@ class RouterosAPI {
     }
 
     function decode_length() {
-        $byte = ord(fread($this->socket, 1));
+        $c = fread($this->socket, 1);
+        if ($c === false || $c === "") return -1;
+        $byte = ord($c);
         if (($byte & 0x80) == 0x00) return $byte;
         if (($byte & 0xc0) == 0x80) return (($byte & 0x3f) << 8) + ord(fread($this->socket, 1));
         if (($byte & 0xe0) == 0xc0) return (($byte & 0x1f) << 16) + (ord(fread($this->socket, 1)) << 8) + ord(fread($this->socket, 1));
