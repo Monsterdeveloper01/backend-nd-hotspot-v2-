@@ -203,6 +203,8 @@ class TransactionController extends Controller
                     
                     $mikrotikId = null;
                     if (env('VOUCHER_MODE', 'radius') === 'mikrotik') {
+                        \Log::info('ATTEMPTING TO CREATE MIKROTIK USER', ['username' => $voucherCode, 'profile' => $transaction->plan->name]);
+                        
                         $mikrotikResult = $this->mikrotik->createUser([
                             'username' => $voucherCode,
                             'password' => '', 
@@ -210,7 +212,8 @@ class TransactionController extends Controller
                             'limit_uptime' => $transaction->plan->duration ?: '0'
                         ]);
                         
-                        // Safety check: Pastikan result adalah array sebelum mengambil .id
+                        \Log::info('MIKROTIK CREATE USER RESULT', ['result' => $mikrotikResult]);
+
                         if (is_array($mikrotikResult) && isset($mikrotikResult[0]['.id'])) {
                             $mikrotikId = $mikrotikResult[0]['.id'];
                         }
@@ -219,7 +222,7 @@ class TransactionController extends Controller
                     $voucher = Voucher::create([
                         'voucher_plan_id' => $transaction->voucher_plan_id,
                         'code' => $voucherCode,
-                        'price' => $transaction->plan->price, // Tambahkan ini agar tidak error DB
+                        'price' => $transaction->plan->price,
                         'status' => 'sold',
                         'customer_phone' => $transaction->customer_phone,
                         'mikrotik_id' => $mikrotikId
