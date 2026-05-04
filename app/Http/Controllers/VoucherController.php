@@ -87,9 +87,10 @@ class VoucherController extends Controller
             ->orderBy('used_at', 'desc')
             ->get();
 
-        // 4. Mark as online if they are in Mikrotik's Active list
-        $vouchers->each(function($v) use ($activeUsernames) {
-            $v->is_online = in_array($v->code, $activeUsernames);
+        // 4. Mark as online if they are in Mikrotik's Active list (Case Insensitive)
+        $lowerActiveUsernames = array_map('strtolower', $activeUsernames);
+        $vouchers->each(function($v) use ($lowerActiveUsernames) {
+            $v->is_online = in_array(strtolower($v->code), $lowerActiveUsernames);
         });
 
         return response()->json($vouchers);

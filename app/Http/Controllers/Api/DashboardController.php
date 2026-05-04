@@ -72,13 +72,16 @@ class DashboardController extends Controller
         // 3. Online Users (Direct from Mikrotik for non-RADIUS)
         $mikrotikActive = $this->mikrotik->getActiveUsers();
         $activeUsernames = array_column($mikrotikActive, 'user');
+        $lowerActiveUsernames = array_map('strtolower', $activeUsernames);
 
         $onlineVouchers = Voucher::with('plan')
             ->whereIn('status', ['sold', 'used'])
-            ->whereIn('code', $activeUsernames)
+            ->whereIn(DB::raw('LOWER(code)'), $lowerActiveUsernames)
             ->get()
-            ->map(function($v) use ($mikrotikActive) {
-                $mUser = collect($mikrotikActive)->firstWhere('user', $v->code);
+            ->map(function($v) use ($mikrotikActive, $lowerActiveUsernames) {
+                $mUser = collect($mikrotikActive)->first(function($val) use ($v) {
+                    return strtolower($val['user']) === strtolower($v->code);
+                });
                 return [
                     'id' => $v->id,
                     'code' => $v->code,
@@ -95,7 +98,7 @@ class DashboardController extends Controller
 
         $offlineVouchers = Voucher::with('plan')
             ->whereIn('status', ['sold', 'used'])
-            ->whereNotIn('code', $activeUsernames)
+            ->whereNotIn(DB::raw('LOWER(code)'), $lowerActiveUsernames)
             ->orderBy('updated_at', 'desc')
             ->take(10)
             ->get()
