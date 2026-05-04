@@ -408,21 +408,18 @@ class RouterosAPI {
     }
 
     function read($parse = true) {
-        $res = array();
         $parsed = array();
         $current = null;
-        $done = false;
+        $res = array();
 
-        while (!$done) {
+        while (true) {
             $length = $this->decode_length();
             if ($length > 0) {
                 $line = fread($this->socket, $length);
                 $res[] = $line;
                 
                 if ($line == '!re' || $line == '!trap' || $line == '!done') {
-                    $type = $line;
-                    if ($type == '!done') $done = true;
-                    $current = array('type' => $type);
+                    $current = array('type' => $line);
                     $parsed[] = &$current;
                 } elseif (substr($line, 0, 1) == '=') {
                     $pos = strpos($line, '=', 1);
@@ -432,8 +429,15 @@ class RouterosAPI {
                         $current[substr($line, 1)] = '';
                     }
                 }
+                
+                // If we got !done, we are almost finished
+                if ($line == '!done') {
+                    // Read the terminating empty word
+                    $this->decode_length();
+                    break;
+                }
             } elseif ($length == 0) {
-                if ($done) break;
+                break;
             }
         }
         
