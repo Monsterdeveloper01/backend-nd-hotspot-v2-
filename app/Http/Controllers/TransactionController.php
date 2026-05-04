@@ -302,9 +302,15 @@ class TransactionController extends Controller
             'success' => true,
             'voucher_code' => $transaction->voucher->code, 
             'voucher_id' => $transaction->voucher->id,
+            'plan_name' => $transaction->plan->name, // Nama Paket untuk display
+            'amount' => (int)$transaction->amount,
+            'gross_amount' => (int)$transaction->amount,
+            'total' => (int)$transaction->amount,
             'data' => [
                 'voucher_code' => $transaction->voucher->code,
                 'code' => $transaction->voucher->code,
+                'plan_name' => $transaction->plan->name,
+                'amount' => (int)$transaction->amount,
             ],
             'voucher' => $transaction->voucher,
             'plan' => $transaction->plan,
