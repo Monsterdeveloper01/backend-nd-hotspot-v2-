@@ -92,9 +92,12 @@ class MikrotikService
             return false;
         }
 
-        $id = $users[0]['.id'] ?? null;
+        // Debug: Log the user object to see why .id might be missing
+        Log::info("Mikrotik: User found for {$username}", ['user_data' => $users[0]]);
+
+        $id = $users[0]['.id'] ?? $users[0]['id'] ?? null;
         if (!$id) {
-            Log::error("Mikrotik: ID user {$username} tidak valid.");
+            Log::error("Mikrotik: ID user {$username} tidak ditemukan dalam data: " . json_encode($users[0]));
             $this->disconnect();
             return false;
         }
@@ -105,7 +108,7 @@ class MikrotikService
             'disabled' => $enabled ? 'no' : 'yes'
         ]);
 
-        Log::info("Mikrotik: Hasil set status untuk {$username}: " . json_encode($response));
+        Log::info("Mikrotik: Hasil set status untuk {$username} (ID: {$id}): " . json_encode($response));
 
         if (!$enabled) {
             $this->kickUser($username);
@@ -413,6 +416,11 @@ function read($parse = true)
                 if ($p['type'] === '!re') {
                     unset($p['type']);
                     $result[] = $p;
+                } elseif ($p['type'] === '!done') {
+                    if (count($p) > 1) { // Jika ada data selain 'type' => '!done'
+                        unset($p['type']);
+                        $result[] = $p;
+                    }
                 } elseif ($p['type'] === '!trap') {
                     // JIKA ADA ERROR (TRAP), KEMBALIKAN PESAN ERRORNYA
                     return $p; 
