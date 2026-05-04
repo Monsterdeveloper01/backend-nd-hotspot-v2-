@@ -234,48 +234,48 @@ class RouterosAPI
         return false;
     }
 
-    function read($parse = true)
+function read($parse = true)
     {
         $res = array();
 
+        // Langkah 1: Membaca aliran data dari MikroTik
         while (true) {
             $length = $this->decode_length();
 
             if ($length > 0) {
                 $line = fread($this->socket, $length);
-
+                
                 if ($line === false || $line === '') {
                     break;
                 }
-
+                
                 $res[] = $line;
-
-                if ($line === '!done') {
-                    $this->decode_length(); // baca terminating 0x00
-                    break;
-                }
             } elseif ($length === 0) {
-                break;
+                // Langkah 2: Jika menerima byte 0 (pemisah kalimat)
+                // Cek apakah di dalam tumpukan data sudah ada kata '!done'
+                if (in_array('!done', $res)) {
+                    break; // Jika ada !done, baru boleh berhenti
+                }
             } else {
+                // Error atau koneksi putus terputus di tengah jalan
                 break;
             }
         }
 
+        // Langkah 3: Memproses baris data mentah menjadi Array PHP
         if ($parse) {
             $parsed = array();
-            $currentIndex = -1; // 🔧 FIX: Gunakan index untuk melacak posisi array
+            $currentIndex = -1;
 
             foreach ($res as $line) {
                 if ($line === '!re' || $line === '!trap' || $line === '!done') {
-                    // Buat wadah baru setiap kali baris baru dimulai
                     $parsed[] = array('type' => $line);
-                    $currentIndex = count($parsed) - 1; 
+                    $currentIndex = count($parsed) - 1;
                 } elseif (substr($line, 0, 1) === '=') {
                     $pos = strpos($line, '=', 1);
                     if ($pos !== false) {
                         $key = substr($line, 1, $pos - 1);
                         $val = substr($line, $pos + 1);
-                        // 🔧 FIX: Langsung masukkan data ke index array yang tepat
                         if ($currentIndex >= 0) {
                             $parsed[$currentIndex][$key] = $val;
                         }
@@ -287,7 +287,7 @@ class RouterosAPI
                 }
             }
 
-            // Hapus !done dari hasil, return hanya data !re
+            // Langkah 4: Membersihkan array dari !done dan mengembalikan data murni
             $result = array();
             foreach ($parsed as $p) {
                 if ($p['type'] === '!re') {
