@@ -88,9 +88,21 @@ class TransactionController extends Controller
         \Log::info('MIDTRANS CALLBACK RECEIVED', $request->all());
 
         $serverKey = env('MIDTRANS_SERVER_KEY');
-        $hashed = hash("sha512", $request->order_id . $request->status_code . $request->gross_amount . $serverKey);
+        
+        // Midtrans gross_amount sometimes comes with decimals (.00)
+        // We must match the EXACT string sent by Midtrans for the signature hash
+        $grossAmount = $request->gross_amount;
+        $orderId = $request->order_id;
+        $statusCode = $request->status_code;
+        
+        $hashed = hash("sha512", $orderId . $statusCode . $grossAmount . $serverKey);
 
         if ($hashed !== $request->signature_key) {
+            \Log::error('MIDTRANS INVALID SIGNATURE', [
+                'expected' => $request->signature_key,
+                'calculated' => $hashed,
+                'payload' => $orderId . $statusCode . $grossAmount . $serverKey
+            ]);
             return response()->json(['message' => 'Invalid signature'], 403);
         }
 
