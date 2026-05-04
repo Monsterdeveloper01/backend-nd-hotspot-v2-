@@ -22,66 +22,76 @@ class VoucherHousekeeping extends Command
 
     public function handle()
     {
-        $this->info("Starting Voucher Housekeeping...");
+        $this->info("Starting Smart Voucher Housekeeping...");
 
-        // 1. Sync ALL Hotspot Users from Mikrotik to find those who have started using their vouchers
-        $allUsers = $this->mikrotik->getAllHotspotUsers();
-        foreach ($allUsers as $user) {
-            $username = $user['name'] ?? null;
-            $uptime = $user['uptime'] ?? '0s';
-            
-            if (!$username || $uptime === '0s') continue;
+        // 1. Ambil SEMUA user dari MikroTik sebagai acuan utama
+        $allMikrotikUsers = $this->mikrotik->getAllHotspotUsers();
+        
+        if (empty($allMikrotikUsers)) {
+            $this->info("Tidak ada user di MikroTik. Selesai.");
+            return;
+        }
 
-            // Find voucher that is not marked as used yet
-            $voucher = Voucher::with('plan')->where('code', $username)->where('status', 'sold')->first();
-            
-            if ($voucher && $voucher->plan) {
-                $durationStr = $voucher->plan->duration;
-                $now = now();
-                
-                // If we don't have used_at yet, set it (this means it's the first time we detect it's been used)
-                if (!$voucher->used_at) {
+        $now = now();
+
+        foreach ($allMikrotikUsers as $mUser) {
+            $code = $mUser['name'] ?? null;
+            $uptime = $mUser['uptime'] ?? '0s';
+
+            if (!$code || $code === 'admin') continue;
+
+            // Cari data vouchernya di database
+            $voucher = Voucher::with('plan')->where('code', $code)->first();
+
+            if (!$voucher) {
+                // Opsional: Jika user ada di MikroTik tapi tidak ada di DB, 
+                // ini mungkin user manual atau sisa-sisa lama. Kita biarkan saja atau hapus jika perlu.
+                continue;
+            }
+
+            // LOGIKA A: Deteksi Penggunaan Pertama (Set expires_at)
+            if ($voucher->status === 'sold' && $uptime !== '0s') {
+                if (!$voucher->used_at && $voucher->plan) {
+                    $durationStr = $voucher->plan->duration;
                     $expiresAt = clone $now;
+                    
                     if (preg_match('/(\d+)d/', $durationStr, $m)) $expiresAt->addDays((int)$m[1]);
                     if (preg_match('/(\d+)h/', $durationStr, $m)) $expiresAt->addHours((int)$m[1]);
                     if (preg_match('/(\d+)m/', $durationStr, $m)) $expiresAt->addMinutes((int)$m[1]);
-                    
+
                     $voucher->update([
                         'status' => 'used',
                         'used_at' => $now,
                         'expires_at' => $expiresAt,
-                        'mac_address' => $user['mac-address'] ?? null
+                        'mac_address' => $mUser['mac-address'] ?? null
                     ]);
-                    $this->info("Marked voucher {$voucher->code} as used. Expires at: $expiresAt");
+                    $this->info("Voucher {$code} terdeteksi mulai digunakan. Exp: {$expiresAt}");
+                }
+            }
+
+            // LOGIKA B: Hapus Jika Sudah Kedaluwarsa
+            $isExpired = ($voucher->expires_at && $voucher->expires_at < $now);
+            $shouldBeDeleted = ($isExpired || in_array($voucher->status, ['expired', 'archive']));
+
+            if ($shouldBeDeleted) {
+                $this->info("Menghapus voucher kedaluwarsa dari MikroTik: {$code}");
+                
+                try {
+                    $this->mikrotik->removeHotspotUser($code);
+                    $this->mikrotik->clearUserActiveSessions($code);
+                    $this->mikrotik->clearUserCookies($code);
+
+                    // Update status di DB jika belum 'expired'
+                    if ($voucher->status !== 'expired') {
+                        $voucher->update(['status' => 'expired']);
+                    }
+                    $this->info("Voucher {$code} berhasil dibersihkan.");
+                } catch (\Exception $e) {
+                    $this->error("Gagal membersihkan {$code}: " . $e->getMessage());
                 }
             }
         }
 
-        // 2. Cleanup ANY voucher that is past its expiration date from Mikrotik
-        // We look for both 'used' and 'expired' status to ensure no one is "stuck" in Mikrotik
-        $expired = Voucher::whereIn('status', ['used', 'expired', 'archive'])
-            ->where('expires_at', '<', Carbon::now())
-            ->get();
-
-        foreach ($expired as $v) {
-            $this->info("Checking/Cleaning expired voucher: {$v->code}");
-            
-            // Force remove from Mikrotik (even if status is already 'expired' in DB)
-            try {
-                $this->mikrotik->removeHotspotUser($v->code);
-                $this->mikrotik->clearUserActiveSessions($v->code);
-                $this->mikrotik->clearUserCookies($v->code);
-            } catch (\Exception $e) {
-                $this->error("Failed to remove {$v->code} from Mikrotik: " . $e->getMessage());
-            }
-            
-            if ($v->status !== 'expired') {
-                $v->update(['status' => 'expired']);
-            }
-            
-            $this->info("Voucher {$v->code} cleanup process completed.");
-        }
-
-        $this->info("Housekeeping finished.");
+        $this->info("Housekeeping selesai.");
     }
 }
