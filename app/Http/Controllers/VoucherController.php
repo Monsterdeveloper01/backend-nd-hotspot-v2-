@@ -99,7 +99,7 @@ class VoucherController extends Controller
     {
         // Get vouchers that have been used and have expired
         return Voucher::with('plan')
-            ->where('status', 'used')
+            ->whereIn('status', ['used', 'expired'])
             ->where('expires_at', '<=', now())
             ->orderBy('expires_at', 'desc')
             ->paginate(15);
@@ -206,8 +206,8 @@ class VoucherController extends Controller
             $code = $active['user'] ?? null;
             if (!$code) continue;
 
-            $voucher = Voucher::where('code', $code)->first();
-            if ($voucher && $voucher->status !== 'used') {
+            $voucher = Voucher::with('plan')->where('code', $code)->first();
+            if ($voucher && $voucher->status !== 'used' && $voucher->plan) {
                 $durationStr = $voucher->plan->duration; 
                 $expiresAt = $this->calculateExpiry($durationStr);
 
@@ -240,9 +240,15 @@ class VoucherController extends Controller
             ->get();
 
         foreach ($expired as $v) {
-            $this->mikrotik->removeHotspotUser($v->code);
-            $this->mikrotik->clearUserActiveSessions($v->code);
-            $this->mikrotik->clearUserCookies($v->code);
+            try {
+                $this->mikrotik->removeHotspotUser($v->code);
+                $this->mikrotik->clearUserActiveSessions($v->code);
+                $this->mikrotik->clearUserCookies($v->code);
+            } catch (\Exception $e) {
+                \Log::error("Cleanup failed for {$v->code}: " . $e->getMessage());
+            }
+
+            $v->update(['status' => 'expired']);
         }
     }
 
