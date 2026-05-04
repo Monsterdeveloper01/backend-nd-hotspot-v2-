@@ -125,6 +125,9 @@ class MikrotikService
 /**
  * RouterosAPI - FIXED VERSION
  */
+/**
+ * RouterosAPI - FIXED VERSION
+ */
 class RouterosAPI
 {
     var $debug      = false;
@@ -136,6 +139,11 @@ class RouterosAPI
     var $socket;
     var $error_no;
     var $error_str;
+
+    // 🔧 FIX: Deklarasi properti agar tidak muncul warning Deprecated di PHP 8.2+
+    var $host;
+    var $user;
+    var $pass;
 
     function connect($host, $user, $pass, $port = 8728)
     {
@@ -195,9 +203,6 @@ class RouterosAPI
         return false;
     }
 
-    /**
-     * 🔧 FIX: Kirim command sekali, lalu terminator chr(0)
-     */
     function comm($com, $args = array())
     {
         if (!$this->connected) return false;
@@ -229,13 +234,9 @@ class RouterosAPI
         return false;
     }
 
-    /**
-     * 🔧 FIX: Handle timeout & pastikan baca sampai !done
-     */
     function read($parse = true)
     {
         $res = array();
-        $nullCount = 0;
 
         while (true) {
             $length = $this->decode_length();
@@ -243,43 +244,45 @@ class RouterosAPI
             if ($length > 0) {
                 $line = fread($this->socket, $length);
 
-                // 🔧 Cek kalau fread return kosong (timeout/putus)
                 if ($line === false || $line === '') {
                     break;
                 }
 
                 $res[] = $line;
 
-                // Kalau sudah !done, baca terminating zero lalu break
                 if ($line === '!done') {
                     $this->decode_length(); // baca terminating 0x00
                     break;
                 }
             } elseif ($length === 0) {
-                // Terminating zero
                 break;
             } else {
-                // Error/invalid length
                 break;
             }
         }
 
         if ($parse) {
             $parsed = array();
-            $current = null;
+            $currentIndex = -1; // 🔧 FIX: Gunakan index untuk melacak posisi array
 
             foreach ($res as $line) {
                 if ($line === '!re' || $line === '!trap' || $line === '!done') {
-                    $current = array('type' => $line);
-                    $parsed[] = $current;
+                    // Buat wadah baru setiap kali baris baru dimulai
+                    $parsed[] = array('type' => $line);
+                    $currentIndex = count($parsed) - 1; 
                 } elseif (substr($line, 0, 1) === '=') {
                     $pos = strpos($line, '=', 1);
                     if ($pos !== false) {
                         $key = substr($line, 1, $pos - 1);
                         $val = substr($line, $pos + 1);
-                        $current[$key] = $val;
+                        // 🔧 FIX: Langsung masukkan data ke index array yang tepat
+                        if ($currentIndex >= 0) {
+                            $parsed[$currentIndex][$key] = $val;
+                        }
                     } else {
-                        $current[substr($line, 1)] = '';
+                        if ($currentIndex >= 0) {
+                            $parsed[$currentIndex][substr($line, 1)] = '';
+                        }
                     }
                 }
             }
