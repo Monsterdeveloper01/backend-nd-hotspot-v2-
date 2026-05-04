@@ -32,6 +32,19 @@ class CustomerController extends Controller
             });
         }
 
+        if ($request->filled('is_isolated')) {
+            $query->where('is_isolated', $request->boolean('is_isolated'));
+        }
+
+        if ($request->filled('status_bayar')) {
+            $query->where('status_bayar', $request->input('status_bayar'));
+        }
+
+        if ($request->has('overdue')) {
+            $query->where('due_date', '<', now())
+                  ->where('status_bayar', '!=', 'paid');
+        }
+
         $customers = $query->latest()->paginate(10);
         
         $customers->getCollection()->transform(function ($customer) {
