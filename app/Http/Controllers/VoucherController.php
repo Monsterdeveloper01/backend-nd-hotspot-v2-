@@ -70,31 +70,25 @@ class VoucherController extends Controller
      */
     public function activeVouchers()
     {
-        // 1. Get fresh Active Users list from Mikrotik
-        $activeUsersFromMikrotik = $this->mikrotik->getActiveUsers();
-        $activeUsernames = collect($activeUsersFromMikrotik)->pluck('user')->toArray();
+        try {
+            // 1. Sync usage (mark as used if they just logged in, cleanup expired, etc)
+            $this->syncVoucherUsage();
 
-        // 2. Sync usage (mark as used if they just logged in)
-        $this->syncVoucherUsage();
-
-        // 3. Get vouchers that are distributed (sold or used) and haven't expired yet
-        $vouchers = Voucher::with('plan')
-            ->whereIn('status', ['sold', 'used'])
-            ->where(function($q) {
-                $q->whereNull('expires_at')
-                  ->orWhere('expires_at', '>', now());
-            })
-            ->orderBy('used_at', 'desc')
-            ->get();
-
-        // 4. Mark as online if they are in Mikrotik's Active list (Case Insensitive)
-        $lowerActiveUsernames = array_map('strtolower', $activeUsernames);
-        $vouchers->each(function($v) use ($lowerActiveUsernames) {
-            $v->is_online = in_array(strtolower($v->code), $lowerActiveUsernames);
-        });
-
-        return response()->json($vouchers);
+            // 2. Get vouchers that are currently active (status used and not expired)
+            return Voucher::with('plan')
+                ->where('status', 'used')
+                ->where('expires_at', '>', now())
+                ->orderBy('used_at', 'desc')
+                ->get();
+        } catch (\Exception $e) {
+            \Log::error("Error in activeVouchers: " . $e->getMessage());
+            return response()->json([
+                'success' => false, 
+                'message' => 'Gagal sinkronisasi data MikroTik: ' . $e->getMessage()
+            ], 500);
+        }
     }
+
     public function soldVouchers()
     {
         // Get vouchers that have been used and have expired
@@ -196,7 +190,10 @@ class VoucherController extends Controller
     {
         $activeUsers = $this->mikrotik->getActiveUsers();
         
-        // 1. Sync stale RadiusSessions
+        // Pastikan activeUsers adalah array untuk mencegah error pada collect()
+        if (!is_array($activeUsers)) {
+            $activeUsers = [];
+        }
         $activeMikrotikUsernames = collect($activeUsers)->pluck('user')->toArray();
         \App\Models\RadiusSession::where('is_active', true)
             ->whereNotIn('username', $activeMikrotikUsernames)
