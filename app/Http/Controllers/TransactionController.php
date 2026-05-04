@@ -280,4 +280,24 @@ class TransactionController extends Controller
         $transaction = Transaction::with(['voucher', 'plan'])->findOrFail($id);
         return response()->json($transaction);
     }
+
+    public function getVoucherByOrder(Request $request)
+    {
+        $orderId = $request->query('order_id');
+        
+        $transaction = Transaction::where('external_id', $orderId)
+                                    ->with(['voucher', 'plan'])
+                                    ->first();
+
+        if (!$transaction || !$transaction->voucher) {
+            return response()->json(['message' => 'Voucher not found or payment pending'], 404);
+        }
+
+        return response()->json([
+            'success' => true,
+            'voucher' => $transaction->voucher,
+            'plan' => $transaction->plan,
+            'transaction' => $transaction
+        ]);
+    }
 }
