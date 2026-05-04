@@ -162,9 +162,16 @@ class CustomerController extends Controller
     public function searchBill(Request $request)
     {
         $query = $request->input('query');
-        $customer = Customer::where('name', $query)
-            ->orWhere('whatsapp', $query)
+        $customer = Customer::where('name', 'LIKE', $query)
+            ->orWhere('whatsapp', 'LIKE', $query)
             ->first();
+
+        if (!$customer) {
+            // Coba pencarian yang lebih fleksibel
+            $customer = Customer::where('name', 'LIKE', "%{$query}%")
+                ->orWhere('whatsapp', 'LIKE', "%{$query}%")
+                ->first();
+        }
 
         if (!$customer) {
             return response()->json(['message' => 'Tagihan tidak ditemukan'], 404);
