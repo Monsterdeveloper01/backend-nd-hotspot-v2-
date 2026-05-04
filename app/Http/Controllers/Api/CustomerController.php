@@ -47,9 +47,12 @@ class CustomerController extends Controller
 
         $customers = $query->latest()->paginate(10);
         
-        $customers->getCollection()->transform(function ($customer) {
+        // Check connectivity once to avoid multiple timeouts if router is offline
+        $isMikrotikAlive = $this->mikrotik->connect();
+
+        $customers->getCollection()->transform(function ($customer) use ($isMikrotikAlive) {
             // Check sync status with Mikrotik (limited to paginated results)
-            $customer->is_synced = $this->mikrotik->checkUserExists($customer->name);
+            $customer->is_synced = $isMikrotikAlive ? $this->mikrotik->checkUserExists($customer->name) : false;
             return $customer;
         });
         
