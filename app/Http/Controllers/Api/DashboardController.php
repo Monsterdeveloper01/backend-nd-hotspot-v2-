@@ -118,7 +118,7 @@ class DashboardController extends Controller
         $combinedUsers = $onlineVouchers->concat($offlineVouchers)->take(15);
 
         // 4. Recent Transactions
-        $recentTransactions = Transaction::with(['plan', 'voucher'])
+        $recentTransactions = Transaction::with(['plan', 'voucher', 'customer'])
             ->where('status', 'success')
             ->orderBy('created_at', 'desc')
             ->take(5)
@@ -156,7 +156,7 @@ class DashboardController extends Controller
 
     public function transactions(Request $request)
     {
-        $query = Transaction::with(['plan', 'voucher'])
+        $query = Transaction::with(['plan', 'voucher', 'customer'])
             ->where('status', 'success')
             ->orderBy('created_at', 'desc');
 

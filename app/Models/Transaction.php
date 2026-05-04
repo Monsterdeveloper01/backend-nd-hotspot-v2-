@@ -20,4 +20,9 @@ class Transaction extends Model
     {
         return $this->belongsTo(Voucher::class);
     }
+
+    public function customer()
+    {
+        return $this->belongsTo(Customer::class, 'customer_phone', 'whatsapp');
+    }
 }
