@@ -203,12 +203,12 @@ class TransactionController extends Controller
                     
                     $mikrotikId = null;
                     if (env('VOUCHER_MODE', 'radius') === 'mikrotik') {
-                        \Log::info('ATTEMPTING TO CREATE MIKROTIK USER', ['username' => $voucherCode, 'profile' => $transaction->plan->name]);
+                        \Log::info('ATTEMPTING TO CREATE MIKROTIK USER', ['username' => $voucherCode, 'profile' => $transaction->plan->mikrotik_profile]);
                         
                         $mikrotikResult = $this->mikrotik->createUser([
                             'username' => $voucherCode,
                             'password' => '', 
-                            'profile' => $transaction->plan->name,
+                            'profile' => $transaction->plan->mikrotik_profile,
                             'limit_uptime' => $transaction->plan->duration ?: '0'
                         ]);
                         
