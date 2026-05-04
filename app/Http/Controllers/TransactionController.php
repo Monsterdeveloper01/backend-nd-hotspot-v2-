@@ -209,12 +209,17 @@ class TransactionController extends Controller
                             'profile' => $transaction->plan->name,
                             'limit_uptime' => $transaction->plan->duration ?: '0'
                         ]);
-                        $mikrotikId = $mikrotikResult[0]['.id'] ?? null;
+                        
+                        // Safety check: Pastikan result adalah array sebelum mengambil .id
+                        if (is_array($mikrotikResult) && isset($mikrotikResult[0]['.id'])) {
+                            $mikrotikId = $mikrotikResult[0]['.id'];
+                        }
                     }
 
                     $voucher = Voucher::create([
                         'voucher_plan_id' => $transaction->voucher_plan_id,
                         'code' => $voucherCode,
+                        'price' => $transaction->plan->price, // Tambahkan ini agar tidak error DB
                         'status' => 'sold',
                         'customer_phone' => $transaction->customer_phone,
                         'mikrotik_id' => $mikrotikId
