@@ -268,7 +268,10 @@ class MikrotikService
         if (!$this->connect()) return [];
         if (!$this->connectInternal()) return [];
         
-        $users = $this->client->comm('/ip/hotspot/user/print');
+        // Use .proplist for smaller response & faster processing
+        $users = $this->client->comm('/ip/hotspot/user/print', [
+            '.proplist' => 'name,disabled'
+        ]);
         
         $this->client->disconnect();
         return is_array($users) ? $users : [];
@@ -325,9 +328,9 @@ class RouterosAPI {
     var $debug = false;
     var $connected = false;
     var $port = 8728;
-    var $timeout = 1; // 1 second timeout for fast failure
-    var $attempts = 1; // Only 1 attempt to prevent hanging
-    var $delay = 0;
+    var $timeout = 10;      // Increased to 10 seconds for large responses
+    var $attempts = 2;      // Increased attempts
+    var $delay = 2;
     var $socket;
     var $error_no;
     var $error_str;
