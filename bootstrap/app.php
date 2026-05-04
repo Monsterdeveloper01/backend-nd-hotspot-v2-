@@ -15,8 +15,8 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->appendToGroup('api', \App\Http\Middleware\CheckMaintenanceMode::class);
     })
     ->withSchedule(function ($schedule) {
-        $schedule->command('billing:check')->dailyAt('08:00');
-        $schedule->command('voucher:cleanup')->everyTenMinutes();
+        // $schedule->command('billing:check')->dailyAt('08:00');
+        // $schedule->command('voucher:cleanup')->everyTenMinutes();
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         //

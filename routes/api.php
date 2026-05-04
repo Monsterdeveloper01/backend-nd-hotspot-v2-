@@ -50,6 +50,7 @@ Route::middleware('auth:sanctum')->group(function () {
     // Admin: Customer Management
     Route::apiResource('customers', CustomerController::class);
     Route::post('customers/{id}/pay-manual', [CustomerController::class, 'payManual']);
+    Route::post('customers/{id}/toggle-status', [CustomerController::class, 'toggleStatus']);
 
     // Admin: Dashboard Stats
     Route::get('/dashboard/stats', [\App\Http\Controllers\Api\DashboardController::class, 'index']);

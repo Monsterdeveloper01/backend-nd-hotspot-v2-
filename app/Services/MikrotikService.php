@@ -60,7 +60,13 @@ class MikrotikService
 
     public function setUserStatus($username, $enabled)
     {
-        if (!$this->connect()) return false;
+        if (!$this->connect()) {
+            Log::error("Mikrotik: Gagal koneksi saat mencoba " . ($enabled ? "enable" : "disable") . " user {$username}");
+            return false;
+        }
+
+        $username = trim($username);
+        Log::info("Mikrotik: Mengubah status user {$username} ke " . ($enabled ? "ENABLED" : "DISABLED"));
 
         // 1. Coba cari langsung (biasanya case-sensitive di Mikrotik)
         $users = $this->client->comm('/ip/hotspot/user/print', [
@@ -81,21 +87,25 @@ class MikrotikService
         }
 
         if (empty($users)) {
-            Log::warning("Mikrotik: User {$username} tidak ditemukan saat ingin di-" . ($enabled ? "enable" : "disable"));
+            Log::warning("Mikrotik: User '{$username}' tidak ditemukan saat ingin di-" . ($enabled ? "enable" : "disable"));
             $this->disconnect();
             return false;
         }
 
         $id = $users[0]['.id'] ?? null;
         if (!$id) {
+            Log::error("Mikrotik: ID user {$username} tidak valid.");
             $this->disconnect();
             return false;
         }
 
-        $this->client->comm('/ip/hotspot/user/set', [
+        // 3. Eksekusi perubahan status
+        $response = $this->client->comm('/ip/hotspot/user/set', [
             '.id' => $id,
             'disabled' => $enabled ? 'no' : 'yes'
         ]);
+
+        Log::info("Mikrotik: Hasil set status untuk {$username}: " . json_encode($response));
 
         if (!$enabled) {
             $this->kickUser($username);

@@ -93,7 +93,23 @@ class CustomerController extends Controller
     public function update(Request $request, $id)
     {
         $customer = Customer::findOrFail($id);
+        $oldName = $customer->name;
+        
         $customer->update($request->all());
+
+        // Sync with Mikrotik if name changed or if is_isolated changed
+        try {
+            if ($oldName !== $customer->name) {
+                // If name changed, we might need more complex sync, 
+                // but for now let's just ensure the current name exists/enabled
+                $this->mikrotik->setUserStatus($customer->name, !$customer->is_isolated);
+            } else if ($request->has('is_isolated')) {
+                $this->mikrotik->setUserStatus($customer->name, !$customer->is_isolated);
+            }
+        } catch (\Exception $e) {
+            \Log::warning("Update Sync: Mikrotik failed for {$customer->name}");
+        }
+
         return response()->json($customer);
     }
 
@@ -101,6 +117,36 @@ class CustomerController extends Controller
     {
         Customer::destroy($id);
         return response()->json(['message' => 'Customer deleted']);
+    }
+
+    public function toggleStatus($id)
+    {
+        $customer = Customer::findOrFail($id);
+        
+        // Toggle the current isolation status
+        $newStatus = !$customer->is_isolated;
+        
+        $mikrotikSynced = false;
+        try {
+            $mikrotikSynced = $this->mikrotik->setUserStatus($customer->name, !$newStatus);
+            // Note: setUserStatus uses $enabled. If we want to UN-isolate, $enabled = true.
+            // If $newStatus is true (isolated), then $enabled should be false.
+            // So we pass !$newStatus to setUserStatus.
+        } catch (\Exception $e) {
+            \Log::error("Toggle Status: Mikrotik failed for {$customer->name}");
+        }
+
+        $customer->is_isolated = $newStatus;
+        $customer->save();
+
+        return response()->json([
+            'success' => true,
+            'mikrotik_synced' => $mikrotikSynced,
+            'is_isolated' => $customer->is_isolated,
+            'message' => $mikrotikSynced 
+                ? 'Status berhasil diperbarui dan sinkron ke MikroTik.' 
+                : 'Status diperbarui di database, tapi GAGAL sinkron ke MikroTik.'
+        ]);
     }
 
     public function payManual($id)
@@ -122,9 +168,10 @@ class CustomerController extends Controller
             'status' => 'success',
         ]);
 
-        // Re-enable in Mikrotik if isolated (Wrapped in try-catch to prevent crash)
+        // Re-enable in Mikrotik if isolated
+        $mikrotikSynced = false;
         try {
-            $this->mikrotik->setUserStatus($customer->name, true);
+            $mikrotikSynced = $this->mikrotik->setUserStatus($customer->name, true);
         } catch (\Exception $e) {
             \Log::warning("Manual Pay: Mikrotik sync failed for {$customer->name}");
         }
@@ -154,7 +201,10 @@ class CustomerController extends Controller
 
         return response()->json([
             'success' => true,
-            'message' => 'Pembayaran manual berhasil',
+            'mikrotik_synced' => $mikrotikSynced,
+            'message' => $mikrotikSynced 
+                ? 'Pembayaran manual berhasil dan layanan telah diaktifkan.' 
+                : 'Pembayaran berhasil, NAMUN GAGAL mengaktifkan MikroTik secara otomatis. Silakan cek status user di router.',
             'customer' => $customer
         ]);
     }
