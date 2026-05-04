@@ -235,8 +235,10 @@ class VoucherController extends Controller
 
     private function cleanupExpiredVouchers()
     {
+        // Limit cleanup to 10 vouchers per request to prevent timeouts
         $expired = Voucher::where('status', 'used')
             ->where('expires_at', '<', now())
+            ->limit(10)
             ->get();
 
         foreach ($expired as $v) {
