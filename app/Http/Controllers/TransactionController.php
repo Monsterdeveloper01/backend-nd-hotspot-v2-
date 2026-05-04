@@ -85,6 +85,8 @@ class TransactionController extends Controller
 
     public function callback(Request $request)
     {
+        \Log::info('MIDTRANS CALLBACK RECEIVED', $request->all());
+
         $serverKey = env('MIDTRANS_SERVER_KEY');
         $hashed = hash("sha512", $request->order_id . $request->status_code . $request->gross_amount . $serverKey);
 
