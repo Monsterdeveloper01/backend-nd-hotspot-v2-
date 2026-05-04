@@ -62,11 +62,26 @@ class MikrotikService
     {
         if (!$this->connect()) return false;
 
+        // 1. Coba cari langsung (biasanya case-sensitive di Mikrotik)
         $users = $this->client->comm('/ip/hotspot/user/print', [
             '?name' => $username
         ]);
 
+        // 2. Jika tidak ketemu, cari secara manual (case-insensitive)
         if (empty($users)) {
+            $allUsers = $this->client->comm('/ip/hotspot/user/print');
+            $searchName = strtolower(trim($username));
+            
+            foreach ($allUsers as $u) {
+                if (strtolower(trim($u['name'] ?? '')) === $searchName) {
+                    $users = [$u];
+                    break;
+                }
+            }
+        }
+
+        if (empty($users)) {
+            Log::warning("Mikrotik: User {$username} tidak ditemukan saat ingin di-" . ($enabled ? "enable" : "disable"));
             $this->disconnect();
             return false;
         }
@@ -93,9 +108,22 @@ class MikrotikService
     public function kickUser($username)
     {
         if (!$this->connect()) return false;
+        
+        // 1. Coba cari langsung
         $active = $this->client->comm('/ip/hotspot/active/print', [
             '?name' => $username
         ]);
+
+        // 2. Jika tidak ketemu, cari manual (case-insensitive)
+        if (empty($active)) {
+            $allActive = $this->client->comm('/ip/hotspot/active/print');
+            $searchName = strtolower(trim($username));
+            foreach ($allActive as $a) {
+                if (strtolower(trim($a['user'] ?? '')) === $searchName) {
+                    $active[] = $a;
+                }
+            }
+        }
 
         foreach ($active as $a) {
             if (isset($a['.id'])) {
