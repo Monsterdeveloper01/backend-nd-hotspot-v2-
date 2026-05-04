@@ -53,8 +53,12 @@ class CustomerController extends Controller
         $mikrotikUsers = $isMikrotikAlive ? collect($this->mikrotik->getAllHotspotUsers()) : collect();
 
         $customers->getCollection()->transform(function ($customer) use ($mikrotikUsers) {
-            // Find user in the bulk list
-            $mUser = $mikrotikUsers->firstWhere('name', $customer->name);
+            // Find user in the bulk list (Case Insensitive & Trimmed)
+            $dbName = strtolower(trim($customer->name));
+            
+            $mUser = $mikrotikUsers->first(function($val) use ($dbName) {
+                return strtolower(trim($val['name'] ?? '')) === $dbName;
+            });
             
             $customer->is_synced = !empty($mUser);
             $customer->mikrotik_enabled = $mUser ? ($mUser['disabled'] === 'false' || $mUser['disabled'] === false) : false;
