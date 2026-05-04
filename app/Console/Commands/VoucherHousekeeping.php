@@ -24,31 +24,36 @@ class VoucherHousekeeping extends Command
     {
         $this->info("Starting Voucher Housekeeping...");
 
-        // 1. Sync Active Users from Mikrotik to mark vouchers as 'used' and set 'expires_at'
-        $activeUsers = $this->mikrotik->getActiveUsers();
-        foreach ($activeUsers as $user) {
-            $username = $user['user'] ?? null;
-            if (!$username) continue;
+        // 1. Sync ALL Hotspot Users from Mikrotik to find those who have started using their vouchers
+        $allUsers = $this->mikrotik->getAllHotspotUsers();
+        foreach ($allUsers as $user) {
+            $username = $user['name'] ?? null;
+            $uptime = $user['uptime'] ?? '0s';
+            
+            if (!$username || $uptime === '0s') continue;
 
-            $voucher = Voucher::with('plan')->where('code', $username)->where('status', '!=', 'used')->first();
+            // Find voucher that is not marked as used yet
+            $voucher = Voucher::with('plan')->where('code', $username)->where('status', 'sold')->first();
             
             if ($voucher && $voucher->plan) {
                 $durationStr = $voucher->plan->duration;
                 $now = now();
-                $expiresAt = clone $now;
-
-                if (preg_match('/(\d+)d/', $durationStr, $m)) $expiresAt->addDays((int)$m[1]);
-                if (preg_match('/(\d+)h/', $durationStr, $m)) $expiresAt->addHours((int)$m[1]);
-                if (preg_match('/(\d+)m/', $durationStr, $m)) $expiresAt->addMonths((int)$m[1]);
                 
-                $voucher->update([
-                    'status' => 'used',
-                    'used_at' => $now,
-                    'expires_at' => $expiresAt,
-                    'mac_address' => $user['mac-address'] ?? null
-                ]);
-                
-                $this->info("Marked voucher {$voucher->code} as used. Expires at: $expiresAt");
+                // If we don't have used_at yet, set it (this means it's the first time we detect it's been used)
+                if (!$voucher->used_at) {
+                    $expiresAt = clone $now;
+                    if (preg_match('/(\d+)d/', $durationStr, $m)) $expiresAt->addDays((int)$m[1]);
+                    if (preg_match('/(\d+)h/', $durationStr, $m)) $expiresAt->addHours((int)$m[1]);
+                    if (preg_match('/(\d+)m/', $durationStr, $m)) $expiresAt->addMinutes((int)$m[1]);
+                    
+                    $voucher->update([
+                        'status' => 'used',
+                        'used_at' => $now,
+                        'expires_at' => $expiresAt,
+                        'mac_address' => $user['mac-address'] ?? null
+                    ]);
+                    $this->info("Marked voucher {$voucher->code} as used. Expires at: $expiresAt");
+                }
             }
         }
 
@@ -65,9 +70,9 @@ class VoucherHousekeeping extends Command
             $this->mikrotik->clearUserActiveSessions($v->code);
             $this->mikrotik->clearUserCookies($v->code);
             
-            // We keep it as 'used' in DB for history, but since expires_at < now,
-            // the RADIUS server will reject any future login attempts.
-            $this->info("Voucher {$v->code} has been cleared from Mikrotik.");
+            // Update status to expired in DB so we don't process it again next time
+            $v->update(['status' => 'expired']);
+            $this->info("Voucher {$v->code} has been cleared from Mikrotik and marked as expired.");
         }
 
         $this->info("Housekeeping finished.");
