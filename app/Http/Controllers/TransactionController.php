@@ -55,8 +55,10 @@ class TransactionController extends Controller
         try {
             $response = \Midtrans\CoreApi::charge($params);
             
-            // Get QRIS URL from actions
+            // Get QRIS URL and QR String from response
             $qrisUrl = '';
+            $qrString = $response->qr_string ?? ''; // Midtrans returns qr_string for QRIS
+            
             if (isset($response->actions)) {
                 foreach ($response->actions as $action) {
                     if ($action->name == 'generate-qr-code') {
@@ -72,6 +74,7 @@ class TransactionController extends Controller
                 'amount' => $plan->price,
                 'status' => 'pending',
                 'payment_url' => $qrisUrl,
+                'qr_string' => $qrString,
             ]);
 
             return response()->json([

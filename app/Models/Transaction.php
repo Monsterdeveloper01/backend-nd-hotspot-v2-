@@ -8,7 +8,7 @@ class Transaction extends Model
 {
     protected $fillable = [
         'external_id', 'voucher_plan_id', 'voucher_id', 'customer_phone',
-        'amount', 'status', 'payment_method', 'payment_url', 'snap_token'
+        'amount', 'status', 'payment_method', 'payment_url', 'qr_string', 'snap_token'
     ];
 
     public function plan()
