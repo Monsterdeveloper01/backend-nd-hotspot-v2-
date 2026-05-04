@@ -315,12 +315,15 @@ function read($parse = true)
                 }
             }
 
-            // Langkah 4: Membersihkan array dari !done dan mengembalikan data murni
+            // Langkah 4: Kembalikan data murni atau pesan error
             $result = array();
             foreach ($parsed as $p) {
                 if ($p['type'] === '!re') {
                     unset($p['type']);
                     $result[] = $p;
+                } elseif ($p['type'] === '!trap') {
+                    // JIKA ADA ERROR (TRAP), KEMBALIKAN PESAN ERRORNYA
+                    return $p; 
                 }
             }
             return $result;
