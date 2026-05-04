@@ -148,6 +148,12 @@ class MikrotikService
         $this->disconnect();
         return $result;
     }
+
+    public function updateProfile($data)
+    {
+        // Placeholder agar tidak error
+        return true;
+    }
 }
 
 /**
