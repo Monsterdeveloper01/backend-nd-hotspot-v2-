@@ -154,6 +154,56 @@ class MikrotikService
         // Placeholder agar tidak error
         return true;
     }
+
+    public function removeHotspotUser($username)
+    {
+        if (!$this->connect()) return false;
+        
+        $users = $this->client->comm('/ip/hotspot/user/print', [
+            '?name' => $username
+        ]);
+
+        if (is_array($users)) {
+            foreach ($users as $u) {
+                if (isset($u['.id'])) {
+                    $this->client->comm('/ip/hotspot/user/remove', [
+                        '.id' => $u['.id']
+                    ]);
+                }
+            }
+        }
+        $this->disconnect();
+        return true;
+    }
+
+    public function clearUserActiveSessions($username)
+    {
+        return $this->kickUser($username);
+    }
+
+    public function clearUserCookies($username)
+    {
+        if (!$this->connect()) return false;
+        $cookies = $this->client->comm('/ip/hotspot/cookie/print', [
+            '?user' => $username
+        ]);
+        if (is_array($cookies)) {
+            foreach ($cookies as $c) {
+                if (isset($c['.id'])) {
+                    $this->client->comm('/ip/hotspot/cookie/remove', [
+                        '.id' => $c['.id']
+                    ]);
+                }
+            }
+        }
+        $this->disconnect();
+        return true;
+    }
+
+    public function deleteUser($username)
+    {
+        return $this->removeHotspotUser($username);
+    }
 }
 
 /**

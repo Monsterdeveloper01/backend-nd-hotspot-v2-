@@ -206,8 +206,8 @@ class VoucherController extends Controller
             $code = $active['user'] ?? null;
             if (!$code) continue;
 
-            $voucher = Voucher::where('code', $code)->first();
-            if ($voucher && $voucher->status !== 'used') {
+            $voucher = Voucher::with('plan')->where('code', $code)->first();
+            if ($voucher && $voucher->status !== 'used' && $voucher->plan) {
                 $durationStr = $voucher->plan->duration; 
                 $expiresAt = $this->calculateExpiry($durationStr);
 
