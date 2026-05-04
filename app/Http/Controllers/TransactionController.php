@@ -120,17 +120,16 @@ class TransactionController extends Controller
                     return response()->json(['message' => 'Customer not found'], 404);
                 }
 
-                \Log::info('CUSTOMER FOUND', ['name' => $customer->name, 'status' => $customer->status_bayar]);
+                // Cek apakah transaksi ini sudah pernah dicatat sebelumnya
+                $alreadyProcessed = Transaction::where('external_id', $orderId)->exists();
 
-                if ($customer->status_bayar !== 'paid') {
+                if (!$alreadyProcessed) {
+                    // Proses update data (hanya dilakukan 1x per Order ID)
                     $customer->status_bayar = 'paid';
                     $customer->is_isolated = false;
                     $customer->due_date = \Carbon\Carbon::parse($customer->due_date)->addMonth();
                     $customer->save();
 
-                    \Log::info('CUSTOMER UPDATED IN DB', ['name' => $customer->name]);
-
-                    // Record to Transactions Table
                     Transaction::create([
                         'external_id' => $orderId,
                         'customer_phone' => $customer->whatsapp,
@@ -138,38 +137,39 @@ class TransactionController extends Controller
                         'status' => 'success',
                         'voucher_plan_id' => null,
                     ]);
-
-                    \Log::info('TRANSACTION RECORD CREATED');
-
-                    // Re-enable in Mikrotik
-                    $mikrotikResult = $this->mikrotik->setUserStatus($customer->name, true);
-                    \Log::info('MIKROTIK SYNC RESULT', ['success' => $mikrotikResult]);
-
-                    // Send WA Receipt
-                    try {
-                        $date = \Carbon\Carbon::now()->format('d/m/Y');
-                        $msg = "✅ *PEMBAYARAN DITERIMA*\n\n" .
-                               "Halo *{$customer->name}*,\n" .
-                               "Pembayaran tagihan internet telah kami terima.\n\n" .
-                               "💳 *Total:* Rp " . number_format($customer->billing_amount, 0, ',', '.') . "\n" .
-                               "📅 *Tanggal:* {$date}\n" .
-                               "💼 *Metode:* {$request->payment_type} (Portal Online)\n" .
-                               "🆔 *Order ID:* {$orderId}\n\n" .
-                               "✅ *Status Layanan: AKTIF*\n" .
-                               "Jika internet belum terhubung, silakan:\n" .
-                               "* Logout & Login ulang\n" .
-                               "* Restart Modem/ONT\n\n" .
-                               "Terima kasih! 🙏\n\n" .
-                               "Hormat kami,\n" .
-                               "*ND-Hotspot* 💡";
-
-                        $this->wa->sendMessage($customer->whatsapp, $msg);
-                        \Log::info('WA RECEIPT SENT');
-                    } catch (\Exception $e) {
-                        \Log::error('WA SEND FAILED', ['error' => $e->getMessage()]);
-                    }
+                    \Log::info('NEW TRANSACTION RECORDED', ['order_id' => $orderId]);
                 } else {
-                    \Log::warning('CUSTOMER ALREADY PAID, SKIPPING LOGIC', ['name' => $customer->name]);
+                    \Log::info('TRANSACTION ALREADY RECORDED, ENSURING SERVICE IS ACTIVE', ['order_id' => $orderId]);
+                }
+
+                // --- BAGIAN INI AKAN SELALU JALAN (IDEMPOTENT) ---
+                
+                // 1. Re-enable in Mikrotik (Selalu pastikan aktif)
+                $mikrotikResult = $this->mikrotik->setUserStatus($customer->name, true);
+                \Log::info('MIKROTIK SYNC RESULT', ['success' => $mikrotikResult]);
+
+                // 2. Send WA Receipt (Selalu kirim sebagai konfirmasi)
+                try {
+                    $date = \Carbon\Carbon::now()->format('d/m/Y');
+                    $msg = "✅ *PEMBAYARAN BERHASIL*\n\n" .
+                           "Halo *{$customer->name}*,\n" .
+                           "Pembayaran tagihan internet Anda telah berhasil kami terima.\n\n" .
+                           "💳 *Total:* Rp " . number_format($customer->billing_amount, 0, ',', '.') . "\n" .
+                           "📅 *Tanggal:* {$date}\n" .
+                           "💼 *Metode:* {$request->payment_type} (Portal Online)\n" .
+                           "🆔 *Order ID:* {$orderId}\n\n" .
+                           "✅ *Status Layanan: AKTIF*\n" .
+                           "Jika internet belum terhubung, silakan:\n" .
+                           "* Logout & Login ulang\n" .
+                           "* Restart Modem/ONT\n\n" .
+                           "Terima kasih! 🙏\n\n" .
+                           "Hormat kami,\n" .
+                           "*ND-Hotspot* 💡";
+
+                    $this->wa->sendMessage($customer->whatsapp, $msg);
+                    \Log::info('WA RECEIPT SENT');
+                } catch (\Exception $e) {
+                    \Log::error('WA SEND FAILED', ['error' => $e->getMessage()]);
                 }
             }
             return response()->json(['message' => 'OK']);
