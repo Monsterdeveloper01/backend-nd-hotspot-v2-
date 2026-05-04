@@ -24,80 +24,102 @@ class DashboardController extends Controller
 
     public function index()
     {
-        try {
-            // 1. Stats
-            $today = Carbon::today();
-            $startOfMonth = Carbon::now()->startOfMonth();
+        // 1. Stats
+        $today = Carbon::today();
+        $startOfMonth = Carbon::now()->startOfMonth();
 
-            // Revenue
-            $monthlyRevenue = DB::table('transactions')
-                ->where('status', 'success')
-                ->where('created_at', '>=', $startOfMonth)
-                ->sum('amount');
+        // Revenue
+        $monthlyRevenue = DB::table('transactions')
+            ->where('status', 'success')
+            ->where('created_at', '>=', $startOfMonth)
+            ->sum('amount');
 
-            $todayRevenue = DB::table('transactions')
-                ->where('status', 'success')
-                ->where('created_at', '>=', $today)
-                ->sum('amount');
+        $todayRevenue = DB::table('transactions')
+            ->where('status', 'success')
+            ->where('created_at', '>=', $today)
+            ->sum('amount');
 
-            $billRevenueToday = DB::table('transactions')
-                ->where('status', 'success')
-                ->where('created_at', '>=', $today)
-                ->where('external_id', 'like', 'BILL-%')
-                ->sum('amount');
+        $billRevenueToday = DB::table('transactions')
+            ->where('status', 'success')
+            ->where('created_at', '>=', $today)
+            ->where('external_id', 'like', 'BILL-%')
+            ->sum('amount');
 
-            $voucherRevenueToday = DB::table('transactions')
-                ->where('status', 'success')
-                ->where('created_at', '>=', $today)
-                ->where('external_id', 'like', 'ND-%')
-                ->sum('amount');
+        $voucherRevenueToday = DB::table('transactions')
+            ->where('status', 'success')
+            ->where('created_at', '>=', $today)
+            ->where('external_id', 'like', 'ND-%')
+            ->sum('amount');
 
-            // Customers
-            $totalCustomers = Customer::count();
-            $dueCustomers = Customer::where('due_date', '<', Carbon::now())->count();
-            $isolatedCustomers = Customer::where('status_bayar', 'unpaid')->where('due_date', '<', Carbon::now()->subDays(3))->count();
+        // Customers
+        $totalCustomers = Customer::count();
+        $dueCustomers = Customer::where('due_date', '<', Carbon::now())->count();
+        $isolatedCustomers = Customer::where('status_bayar', 'unpaid')->where('due_date', '<', Carbon::now()->subDays(3))->count();
 
-            // Vouchers Sold
-            $voucherSoldToday = Voucher::where('status', 'sold')
-                ->where('updated_at', '>=', $today)
-                ->count();
+        // Vouchers Sold
+        $voucherSoldToday = Voucher::where('status', 'sold')
+            ->where('updated_at', '>=', $today)
+            ->count();
 
-            // 2. Chart Data (Daily revenue this month)
-            $chartData = DB::table('transactions')
-                ->select(DB::raw('DATE(created_at) as date'), DB::raw('SUM(amount) as total'))
-                ->where('status', 'success')
-                ->where('created_at', '>=', $startOfMonth)
-                ->groupBy('date')
-                ->get();
+        // 2. Chart Data (Daily revenue this month)
+        $chartData = DB::table('transactions')
+            ->select(DB::raw('DATE(created_at) as date'), DB::raw('SUM(amount) as total'))
+            ->where('status', 'success')
+            ->where('created_at', '>=', $startOfMonth)
+            ->groupBy('date')
+            ->get();
 
-            // 3. Online Users (Direct from Mikrotik for non-RADIUS)
-            $mikrotikActive = $this->mikrotik->getActiveUsers();
-            if (!is_array($mikrotikActive)) $mikrotikActive = [];
-            
-            $activeUsernames = array_column($mikrotikActive, 'user');
-            $lowerActiveUsernames = array_map('strtolower', $activeUsernames);
+        // 3. Online Users (Direct from Mikrotik for non-RADIUS)
+        $mikrotikActive = $this->mikrotik->getActiveUsers();
+        $activeUsernames = array_column($mikrotikActive, 'user');
+        $lowerActiveUsernames = array_map('strtolower', $activeUsernames);
 
-            $onlineVouchers = Voucher::with('plan')
-                ->whereIn('status', ['sold', 'used'])
-                ->whereIn(DB::raw('LOWER(code)'), $lowerActiveUsernames)
-                ->get()
-                ->map(function($v) use ($mikrotikActive) {
-                    $mUser = collect($mikrotikActive)->first(function($val) use ($v) {
-                        return is_array($val) && strtolower($val['user'] ?? '') === strtolower($v->code);
-                    });
-                    return [
-                        'id' => $v->id,
-                        'code' => $v->code,
-                        'plan_name' => $v->plan->name ?? 'Legacy',
-                        'is_online' => true,
-                        'mac_address' => $mUser['mac-address'] ?? ($mUser['address'] ?? $v->mac_address),
-                        'uptime' => $mUser['uptime'] ?? '-',
-                        'bytes_in' => $mUser['bytes-in'] ?? '0',
-                        'bytes_out' => $mUser['bytes-out'] ?? '0',
-                        'used_at' => $v->used_at,
-                        'expires_at' => $v->expires_at,
-                    ];
+        $onlineVouchers = Voucher::with('plan')
+            ->whereIn('status', ['sold', 'used'])
+            ->whereIn(DB::raw('LOWER(code)'), $lowerActiveUsernames)
+            ->get()
+            ->map(function($v) use ($mikrotikActive, $lowerActiveUsernames) {
+                $mUser = collect($mikrotikActive)->first(function($val) use ($v) {
+                    return strtolower($val['user']) === strtolower($v->code);
                 });
+                return [
+                    'id' => $v->id,
+                    'code' => $v->code,
+                    'plan_name' => $v->plan->name ?? 'Legacy',
+                    'is_online' => true,
+                    'mac_address' => $mUser['mac-address'] ?? ($mUser['address'] ?? $v->mac_address),
+                    'uptime' => $mUser['uptime'] ?? '-',
+                    'bytes_in' => $mUser['bytes-in'] ?? '0',
+                    'bytes_out' => $mUser['bytes-out'] ?? '0',
+                    'used_at' => $v->used_at,
+                    'expires_at' => $v->expires_at,
+                ];
+            });
+
+        $offlineVouchers = Voucher::with('plan')
+            ->whereIn('status', ['sold', 'used'])
+            ->whereNotIn(DB::raw('LOWER(code)'), $lowerActiveUsernames)
+            ->orderBy('updated_at', 'desc')
+            ->take(10)
+            ->get()
+            ->map(function($v) {
+                return [
+                    'id' => $v->id,
+                    'code' => $v->code,
+                    'plan_name' => $v->plan->name ?? 'Legacy',
+                    'is_online' => false,
+                    'mac_address' => $v->mac_address,
+                    'uptime' => '-',
+                    'used_at' => $v->used_at,
+                    'expires_at' => $v->expires_at,
+                ];
+            });
+
+        $combinedUsers = $onlineVouchers->concat($offlineVouchers)->take(15);
+
+        // 4. Recent Transactions
+        $recentTransactions = Transaction::with(['plan', 'voucher', 'customer'])
+            ->where('status', 'success')
             ->orderBy('created_at', 'desc')
             ->take(5)
             ->get();

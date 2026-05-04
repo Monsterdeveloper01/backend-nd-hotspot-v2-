@@ -404,7 +404,8 @@ function read($parse = true)
                     unset($p['type']);
                     $result[] = $p;
                 } elseif ($p['type'] === '!trap') {
-                    \Log::error("Mikrotik Trap Error: " . ($p['message'] ?? 'Unknown error'));
+                    // JIKA ADA ERROR (TRAP), KEMBALIKAN PESAN ERRORNYA
+                    return $p; 
                 }
             }
             return $result;
