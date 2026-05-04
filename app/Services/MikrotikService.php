@@ -20,7 +20,7 @@ class MikrotikService
         ];
     }
 
-    private function connect()
+    public function connect()
     {
         if (!$this->client) {
             $this->client = new RouterosAPI();
