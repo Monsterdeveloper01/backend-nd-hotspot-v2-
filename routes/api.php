@@ -8,6 +8,7 @@ use App\Http\Controllers\Api\CustomerController;
 use App\Http\Controllers\Api\RadiusClientController;
 use Illuminate\Support\Facades\Route;
 
+Route::get('/', function() { return view('welcome'); });
 Route::post('/login', [AuthController::class, 'login']);
 Route::get('/router-status', function (App\Services\MikrotikService $mikrotik) {
     return response()->json(['connected' => $mikrotik->connect()]);
@@ -86,3 +87,8 @@ Route::get('/test', function () {
         'status' => 'success'
     ]);
 });
+
+// Fallback: Jika akses route API yang tidak ada atau akses lewat browser sembarangan
+Route::any('{any}', function () {
+    return view('welcome');
+})->where('any', '.*');
