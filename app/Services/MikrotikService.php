@@ -68,56 +68,88 @@ public function setUserStatus($username, $enabled)
         $username = trim($username);
         Log::info("Mikrotik: Mengubah status user {$username} ke " . ($enabled ? "ENABLED" : "DISABLED"));
 
-        // 1. Coba cari langsung (biasanya case-sensitive di Mikrotik)
+        // 1. Coba cari langsung ke MikroTik
         $users = $this->client->comm('/ip/hotspot/user/print', [
             '?name' => $username
         ]);
 
-        // 2. Jika tidak ketemu, cari secara manual (case-insensitive)
-        if (empty($users)) {
+        // Cek apakah MikroTik mengembalikan error (!trap) dari pencarian pertama
+        if (isset($users['message'])) {
+            Log::warning("Mikrotik API Error (Pencarian 1): " . $users['message']);
+            $users = []; // Kosongkan agar bisa pindah ke pencarian manual
+        }
+
+        // 2. Jika tidak ketemu (kosong atau error), cari secara menyeluruh (manual)
+        if (empty($users) || !isset($users[0])) {
             $allUsers = $this->client->comm('/ip/hotspot/user/print');
-            $searchName = strtolower(trim($username));
             
-            foreach ($allUsers as $u) {
-                if (strtolower(trim($u['name'] ?? '')) === $searchName) {
-                    $users = [$u];
-                    break;
+            if (isset($allUsers['message'])) {
+                Log::error("Mikrotik API Error (Pencarian Total): " . $allUsers['message']);
+                $this->disconnect();
+                return false;
+            }
+
+            $searchName = strtolower($username);
+            $users = [];
+            
+            // Perulangan untuk mencocokkan nama dengan aman
+            if (is_array($allUsers)) {
+                foreach ($allUsers as $u) {
+                    if (strtolower(trim($u['name'] ?? '')) === $searchName) {
+                        $users = [$u];
+                        break;
+                    }
                 }
             }
         }
 
-        if (empty($users)) {
-            Log::warning("Mikrotik: User '{$username}' tidak ditemukan saat ingin di-" . ($enabled ? "enable" : "disable"));
+        // Validasi final sebelum mengambil ID
+        if (empty($users) || !isset($users[0])) {
+            Log::warning("Mikrotik: User '{$username}' tidak ditemukan di router saat ingin di-" . ($enabled ? "enable" : "disable"));
             $this->disconnect();
             return false;
         }
 
         $id = $users[0]['.id'] ?? $users[0]['id'] ?? null;
         if (!$id) {
-            Log::error("Mikrotik: ID user {$username} tidak ditemukan dalam data: " . json_encode($users[0]));
+            Log::error("Mikrotik: ID user {$username} tidak valid atau tidak ditemukan dalam struktur data API.", ['data' => $users[0]]);
             $this->disconnect();
             return false;
         }
 
-        // 3. Eksekusi perubahan status (Ganti 'no' / 'yes' menjadi 'false' / 'true')
+        // 3. Eksekusi perubahan status
         $response = $this->client->comm('/ip/hotspot/user/set', [
             '.id' => $id,
-            'disabled' => $enabled ? 'false' : 'true' 
+            'disabled' => $enabled ? 'false' : 'true'
         ]);
 
-        Log::info("Mikrotik: Hasil set status untuk {$username} (ID: {$id}): " . json_encode($response));
+        // Cek apakah perintah pengubahan status ditolak router
+        if (isset($response['message'])) {
+            Log::error("Mikrotik API Error (Set Status Gagal): " . $response['message']);
+            $this->disconnect();
+            return false;
+        }
 
-        // Putus koneksi sebentar untuk mencegah bentrok socket, karena fungsi di bawah memiliki open/close koneksi sendiri
+        Log::info("Mikrotik: Proses set status untuk {$username} (ID: {$id}) berhasil.");
+
+        // Putus koneksi sebelum menjalankan fungsi lain untuk menghindari tabrakan socket
         $this->disconnect();
 
-        // 4. Bersihkan Active Session & Cookies
+        // 4. Bersihkan Sesi Aktif & Cookies
         if ($enabled) {
-            // Jika di-enable, hapus sesi lamanya supaya device otomatis login dengan akses internet
-            $this->clearUserActiveSessions($username);
-            $this->clearUserCookies($username);
+            // Kita bungkus di try-catch tambahan agar jika gagal hapus cookie, proses utamanya tetap sukses
+            try {
+                $this->clearUserActiveSessions($username);
+                $this->clearUserCookies($username);
+            } catch (\Throwable $th) {
+                Log::warning("Sesi/cookie gagal dibersihkan untuk {$username}: " . $th->getMessage());
+            }
         } else {
-            // Jika di-disable (isolir), kick dari jaringan
-            $this->kickUser($username);
+            try {
+                $this->kickUser($username);
+            } catch (\Throwable $th) {
+                Log::warning("Gagal kick user {$username}: " . $th->getMessage());
+            }
         }
 
         return true;
