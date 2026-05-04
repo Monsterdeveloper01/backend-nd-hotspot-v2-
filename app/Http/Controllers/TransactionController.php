@@ -176,11 +176,20 @@ class TransactionController extends Controller
         }
 
         // Handle Voucher Transaction
-        $transaction = Transaction::where('external_id', $request->order_id)->firstOrFail();
+        $transaction = Transaction::where('external_id', $orderId)->first();
+        
+        if (!$transaction) {
+            \Log::error('TRANSACTION NOT FOUND', ['external_id' => $orderId]);
+            return response()->json(['message' => 'Transaction not found'], 404);
+        }
+
+        // Load plan relationship for name and duration
+        $transaction->load('plan');
         
         if ($request->transaction_status == 'settlement' || $request->transaction_status == 'capture') {
             if ($transaction->status !== 'success') {
                 $transaction->status = 'success';
+                \Log::info('PROCESSING VOUCHER GENERATION', ['order_id' => $orderId]);
 
                 // Assign a voucher from stock or generate one if empty
                 $voucher = Voucher::where('voucher_plan_id', $transaction->voucher_plan_id)
@@ -188,8 +197,9 @@ class TransactionController extends Controller
                                  ->first();
 
                 if (!$voucher) {
-                    // Generate new voucher on the fly if stock is empty
-                    $voucherCode = Str::upper(Str::random(8));
+                    // Generate new voucher 6 karakter (Tanpa I, O, L agar tidak bingung)
+                    $chars = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+                    $voucherCode = substr(str_shuffle(str_repeat($chars, 6)), 0, 6);
                     
                     $mikrotikId = null;
                     if (env('VOUCHER_MODE', 'radius') === 'mikrotik') {
@@ -209,40 +219,46 @@ class TransactionController extends Controller
                         'customer_phone' => $transaction->customer_phone,
                         'mikrotik_id' => $mikrotikId
                     ]);
+                    \Log::info('NEW VOUCHER GENERATED', ['code' => $voucherCode]);
                 } else {
                     // If using existing stock, check if we need to inject into Mikrotik
                     if (env('VOUCHER_MODE', 'radius') === 'mikrotik' && !$voucher->mikrotik_id) {
-                        $mikrotikResult = $this->mikrotik->createUser([
+                        $this->mikrotik->createUser([
                             'username' => $voucher->code,
                             'password' => '', 
                             'profile' => $transaction->plan->name,
                             'limit_uptime' => $transaction->plan->duration ?: '0'
                         ]);
-                        $voucher->mikrotik_id = $mikrotikResult[0]['.id'] ?? null;
                     }
                     
                     $voucher->status = 'sold';
                     $voucher->customer_phone = $transaction->customer_phone;
                     $voucher->save();
+                    \Log::info('VOUCHER FROM STOCK ASSIGNED', ['code' => $voucher->code]);
                 }
 
                 $transaction->voucher_id = $voucher->id;
                 
                 // Send WA
-                $msg = "🎫 *VOUCHER INTERNET – ND-Hotspot*\n" .
-                       env('APP_URL') . "\n\n" .
-                       "Halo Pelanggan,\n" .
-                       "Paket: *{$transaction->plan->name}*\n" .
-                       "Harga: Rp " . number_format($transaction->amount, 0, ',', '.') . "\n" .
-                       "Kode: *{$voucher->code}*\n\n" .
-                       "Cara Login:\n" .
-                       "* Pastikan sinyal Wifi *ND-Hotspot* tercover\n" .
-                       "* Pilih sinyal Wifi *ND-Hotspot*\n" .
-                       "* Masukkan kode Voucher\n\n" .
-                       "Hormat kami,\n" .
-                       "*ND-Hotspot* 💡";
-                
-                $this->wa->sendMessage($transaction->customer_phone, $msg);
+                try {
+                    $msg = "🎫 *VOUCHER INTERNET – ND-Hotspot*\n" .
+                           env('APP_URL') . "\n\n" .
+                           "Halo Pelanggan,\n" .
+                           "Paket: *{$transaction->plan->name}*\n" .
+                           "Harga: Rp " . number_format($transaction->amount, 0, ',', '.') . "\n" .
+                           "Kode: *{$voucher->code}*\n\n" .
+                           "Cara Login:\n" .
+                           "* Pastikan sinyal Wifi *ND-Hotspot* tercover\n" .
+                           "* Pilih sinyal Wifi *ND-Hotspot*\n" .
+                           "* Masukkan kode Voucher\n\n" .
+                           "Hormat kami,\n" .
+                           "*ND-Hotspot* 💡";
+                    
+                    $this->wa->sendMessage($transaction->customer_phone, $msg);
+                    \Log::info('VOUCHER WA SENT');
+                } catch (\Exception $e) {
+                    \Log::error('VOUCHER WA FAILED', ['error' => $e->getMessage()]);
+                }
                 
                 $transaction->save();
             }
