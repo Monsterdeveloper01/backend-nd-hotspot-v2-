@@ -25,7 +25,8 @@ class CheckMaintenanceMode
             $allowedPaths = [
                 'api/login',
                 'api/maintenance/*', 
-                'api/log-visit', // Crucial: prevent tracking loop
+                'api/log-visit', 
+                'api/midtrans-callback', // Allow Midtrans to bypass maintenance
             ];
 
             foreach ($allowedPaths as $path) {
