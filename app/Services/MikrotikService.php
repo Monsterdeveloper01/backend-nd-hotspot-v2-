@@ -268,9 +268,7 @@ class MikrotikService
         if (!$this->connect()) return [];
         if (!$this->connectInternal()) return [];
         
-        $users = $this->client->comm('/ip/hotspot/user/print', [
-            '.proplist' => 'name,disabled'
-        ]);
+        $users = $this->client->comm('/ip/hotspot/user/print');
         
         $this->client->disconnect();
         return is_array($users) ? $users : [];
