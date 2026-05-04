@@ -259,8 +259,21 @@ class MikrotikService
 
         return [
             'exists' => true,
-            'enabled' => $users[0]['disabled'] === 'false' || $users[0]['disabled'] === false
+            'enabled' => ($users[0]['disabled'] === 'false' || $users[0]['disabled'] === false)
         ];
+    }
+
+    public function getAllHotspotUsers()
+    {
+        if (!$this->connect()) return [];
+        if (!$this->connectInternal()) return [];
+        
+        $users = $this->client->comm('/ip/hotspot/user/print', [
+            '.proplist' => 'name,disabled'
+        ]);
+        
+        $this->client->disconnect();
+        return is_array($users) ? $users : [];
     }
 
     public function getActiveUsers()

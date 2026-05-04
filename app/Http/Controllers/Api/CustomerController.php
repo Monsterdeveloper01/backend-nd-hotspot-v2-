@@ -48,14 +48,16 @@ class CustomerController extends Controller
 
         $customers = $query->latest()->paginate(10);
         
-        // Check connectivity once to avoid multiple timeouts if router is offline
+        // Optimize: Fetch all Mikrotik users ONCE instead of in a loop
         $isMikrotikAlive = $this->mikrotik->connect();
+        $mikrotikUsers = $isMikrotikAlive ? collect($this->mikrotik->getAllHotspotUsers()) : collect();
 
-        $customers->getCollection()->transform(function ($customer) use ($isMikrotikAlive) {
-            // Check detailed status with Mikrotik
-            $status = $isMikrotikAlive ? $this->mikrotik->getUserStatus($customer->name) : ['exists' => false, 'enabled' => false];
-            $customer->is_synced = $status['exists'];
-            $customer->mikrotik_enabled = $status['enabled'];
+        $customers->getCollection()->transform(function ($customer) use ($mikrotikUsers) {
+            // Find user in the bulk list
+            $mUser = $mikrotikUsers->firstWhere('name', $customer->name);
+            
+            $customer->is_synced = !empty($mUser);
+            $customer->mikrotik_enabled = $mUser ? ($mUser['disabled'] === 'false' || $mUser['disabled'] === false) : false;
             return $customer;
         });
         
