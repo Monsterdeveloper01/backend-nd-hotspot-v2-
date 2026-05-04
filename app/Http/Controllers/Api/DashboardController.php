@@ -69,12 +69,12 @@ class DashboardController extends Controller
             ->groupBy('date')
             ->get();
 
-        // 3. Online Users (Combined data from Mikrotik and DB)
+        // 3. Online Users (Direct from Mikrotik for non-RADIUS)
         $mikrotikActive = $this->mikrotik->getActiveUsers();
         $activeUsernames = array_column($mikrotikActive, 'user');
 
         $onlineVouchers = Voucher::with('plan')
-            ->where('status', 'sold')
+            ->whereIn('status', ['sold', 'used'])
             ->whereIn('code', $activeUsernames)
             ->get()
             ->map(function($v) use ($mikrotikActive) {
@@ -82,9 +82,9 @@ class DashboardController extends Controller
                 return [
                     'id' => $v->id,
                     'code' => $v->code,
-                    'plan_name' => $v->plan->name,
+                    'plan_name' => $v->plan->name ?? 'Legacy',
                     'is_online' => true,
-                    'mac_address' => $mUser['address'] ?? $v->mac_address,
+                    'mac_address' => $mUser['mac-address'] ?? ($mUser['address'] ?? $v->mac_address),
                     'uptime' => $mUser['uptime'] ?? '-',
                     'bytes_in' => $mUser['bytes-in'] ?? '0',
                     'bytes_out' => $mUser['bytes-out'] ?? '0',
@@ -94,7 +94,7 @@ class DashboardController extends Controller
             });
 
         $offlineVouchers = Voucher::with('plan')
-            ->where('status', 'sold')
+            ->whereIn('status', ['sold', 'used'])
             ->whereNotIn('code', $activeUsernames)
             ->orderBy('updated_at', 'desc')
             ->take(10)
@@ -103,7 +103,7 @@ class DashboardController extends Controller
                 return [
                     'id' => $v->id,
                     'code' => $v->code,
-                    'plan_name' => $v->plan->name,
+                    'plan_name' => $v->plan->name ?? 'Legacy',
                     'is_online' => false,
                     'mac_address' => $v->mac_address,
                     'uptime' => '-',

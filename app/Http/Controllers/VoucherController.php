@@ -70,12 +70,16 @@ class VoucherController extends Controller
      */
     public function activeVouchers()
     {
-        // 1. Sync usage from Mikrotik Active list
+        // 1. Get fresh Active Users list from Mikrotik
+        $activeUsersFromMikrotik = $this->mikrotik->getActiveUsers();
+        $activeUsernames = collect($activeUsersFromMikrotik)->pluck('user')->toArray();
+
+        // 2. Sync usage (mark as used if they just logged in)
         $this->syncVoucherUsage();
 
-        // 2. Get used vouchers that haven't expired yet
+        // 3. Get vouchers that are distributed (sold or used) and haven't expired yet
         $vouchers = Voucher::with('plan')
-            ->where('status', 'used')
+            ->whereIn('status', ['sold', 'used'])
             ->where(function($q) {
                 $q->whereNull('expires_at')
                   ->orWhere('expires_at', '>', now());
@@ -83,10 +87,7 @@ class VoucherController extends Controller
             ->orderBy('used_at', 'desc')
             ->get();
 
-        $activeUsernames = \App\Models\RadiusSession::where('is_active', true)
-            ->pluck('username')
-            ->toArray();
-
+        // 4. Mark as online if they are in Mikrotik's Active list
         $vouchers->each(function($v) use ($activeUsernames) {
             $v->is_online = in_array($v->code, $activeUsernames);
         });
