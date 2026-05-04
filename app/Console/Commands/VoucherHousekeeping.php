@@ -57,22 +57,29 @@ class VoucherHousekeeping extends Command
             }
         }
 
-        // 2. Cleanup expired vouchers from Mikrotik and mark status
-        $expired = Voucher::where('status', 'used')
+        // 2. Cleanup ANY voucher that is past its expiration date from Mikrotik
+        // We look for both 'used' and 'expired' status to ensure no one is "stuck" in Mikrotik
+        $expired = Voucher::whereIn('status', ['used', 'expired', 'archive'])
             ->where('expires_at', '<', Carbon::now())
             ->get();
 
         foreach ($expired as $v) {
-            $this->info("Cleaning up expired voucher: {$v->code}");
+            $this->info("Checking/Cleaning expired voucher: {$v->code}");
             
-            // Remove from Mikrotik
-            $this->mikrotik->removeHotspotUser($v->code);
-            $this->mikrotik->clearUserActiveSessions($v->code);
-            $this->mikrotik->clearUserCookies($v->code);
+            // Force remove from Mikrotik (even if status is already 'expired' in DB)
+            try {
+                $this->mikrotik->removeHotspotUser($v->code);
+                $this->mikrotik->clearUserActiveSessions($v->code);
+                $this->mikrotik->clearUserCookies($v->code);
+            } catch (\Exception $e) {
+                $this->error("Failed to remove {$v->code} from Mikrotik: " . $e->getMessage());
+            }
             
-            // Update status to expired in DB so we don't process it again next time
-            $v->update(['status' => 'expired']);
-            $this->info("Voucher {$v->code} has been cleared from Mikrotik and marked as expired.");
+            if ($v->status !== 'expired') {
+                $v->update(['status' => 'expired']);
+            }
+            
+            $this->info("Voucher {$v->code} cleanup process completed.");
         }
 
         $this->info("Housekeeping finished.");
