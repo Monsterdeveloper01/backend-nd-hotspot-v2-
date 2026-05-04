@@ -105,6 +105,15 @@ class TransactionController extends Controller
                     $customer->due_date = Carbon::parse($customer->due_date)->addMonth();
                     $customer->save();
 
+                    // Record to Transactions Table for Accounting/Dashboard
+                    Transaction::create([
+                        'external_id' => $request->order_id,
+                        'customer_phone' => $customer->whatsapp,
+                        'amount' => $request->gross_amount,
+                        'status' => 'success',
+                        'voucher_plan_id' => null, // Bill payment doesn't have a specific voucher plan
+                    ]);
+
                     // Re-enable in Mikrotik
                     $this->mikrotik->setUserStatus($customer->name, true);
 

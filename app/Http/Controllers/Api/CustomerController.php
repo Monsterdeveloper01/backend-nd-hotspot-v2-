@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Customer;
+use App\Models\Transaction;
 use App\Services\MikrotikService;
 use App\Services\WhatsAppService;
 use Illuminate\Http\Request;
@@ -101,6 +102,15 @@ class CustomerController extends Controller
         $customer->is_isolated = false;
         $customer->due_date = Carbon::parse($customer->due_date)->addMonth();
         $customer->save();
+
+        // Record to Transactions Table
+        $orderId = 'MANUAL-BILL-' . $customer->id . '-' . time();
+        Transaction::create([
+            'external_id' => $orderId,
+            'customer_phone' => $customer->whatsapp,
+            'amount' => $customer->billing_amount,
+            'status' => 'success',
+        ]);
 
         // Re-enable in Mikrotik if isolated (Wrapped in try-catch to prevent crash)
         try {
