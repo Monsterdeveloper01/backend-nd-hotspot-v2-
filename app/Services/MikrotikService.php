@@ -407,38 +407,36 @@ class RouterosAPI {
         return false;
     }
 
-    function read($parse = true) {
-        $res = array();
-        while (true) {
+    function read() {
+        $parsed = array();
+        $current = null;
+        $done = false;
+
+        while (!$done) {
             $length = $this->decode_length();
             if ($length > 0) {
-                $byte_read = 0;
-                $line = '';
-                while ($byte_read < $length) {
-                    $temp = fread($this->socket, $length - $byte_read);
-                    $byte_read += strlen($temp);
-                    $line .= $temp;
-                }
-                $res[] = $line;
-            } elseif ($length == 0) {
-                break;
-            }
-        }
-        if ($parse) {
-            $parsed = array();
-            $current = null;
-            foreach ($res as $line) {
+                $line = fread($this->socket, $length);
                 if ($line == '!re' || $line == '!trap' || $line == '!done') {
-                    $current = array('type' => $line);
+                    $type = $line;
+                    if ($type == '!done') {
+                        $done = true;
+                    }
+                    $current = array('type' => $type);
                     $parsed[] = &$current;
                 } elseif (substr($line, 0, 1) == '=') {
-                    $parts = explode('=', $line, 3);
-                    $current[$parts[1]] = isset($parts[2]) ? $parts[2] : '';
+                    $pos = strpos($line, '=', 1);
+                    if ($pos !== false) {
+                        $current[substr($line, 1, $pos - 1)] = substr($line, $pos + 1);
+                    } else {
+                        $current[substr($line, 1)] = '';
+                    }
                 }
+            } elseif ($length == 0) {
+                // End of sentence word
+                if ($done) break;
             }
-            return $parsed;
         }
-        return $res;
+        return $parsed;
     }
 
     function encode_length($length) {
