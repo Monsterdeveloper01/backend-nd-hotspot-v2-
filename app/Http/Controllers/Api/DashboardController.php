@@ -42,7 +42,10 @@ class DashboardController extends Controller
         $billRevenueToday = DB::table('transactions')
             ->where('status', 'success')
             ->where('created_at', '>=', $today)
-            ->where('external_id', 'like', 'BILL-%')
+            ->where(function($q) {
+                $q->where('external_id', 'like', 'BILL-%')
+                  ->orWhere('external_id', 'like', 'MANUAL-%');
+            })
             ->sum('amount');
 
         $voucherRevenueToday = DB::table('transactions')
@@ -56,9 +59,11 @@ class DashboardController extends Controller
         $dueCustomers = Customer::where('due_date', '<', Carbon::now())->count();
         $isolatedCustomers = Customer::where('status_bayar', 'unpaid')->where('due_date', '<', Carbon::now()->subDays(3))->count();
 
-        // Vouchers Sold
-        $voucherSoldToday = Voucher::where('status', 'sold')
-            ->where('updated_at', '>=', $today)
+        // Voucher Terjual (Berdasarkan jumlah transaksi sukses hari ini)
+        $voucherSoldToday = DB::table('transactions')
+            ->where('status', 'success')
+            ->where('created_at', '>=', $today)
+            ->where('external_id', 'like', 'ND-%')
             ->count();
 
         // 2. Chart Data (Daily revenue this month)

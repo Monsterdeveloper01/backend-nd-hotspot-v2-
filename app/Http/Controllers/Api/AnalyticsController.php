@@ -40,7 +40,7 @@ class AnalyticsController extends Controller
                 DB::raw('HOUR(created_at) as hour'),
                 DB::raw('count(*) as count')
             )
-            ->where('created_at', '>', now()->subDays(7))
+            ->where('created_at', '>=', now()->startOfDay())
             ->groupBy('hour')
             ->orderBy('hour')
             ->get();
