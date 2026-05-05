@@ -28,11 +28,14 @@ class CheckCustomerBilling extends Command
 
     public function handle()
     {
+        \Log::info("Billing Check started at: " . now());
         $today = Carbon::today();
         $tomorrow = Carbon::tomorrow();
         
+        $this->info("Checking billing for Today: {$today->toDateString()} and Tomorrow: {$tomorrow->toDateString()}");
         // 0. WhatsApp Reminders (H-1)
         $h1Customers = Customer::whereDate('due_date', $tomorrow)->get();
+        \Log::info("Found " . $h1Customers->count() . " customers for H-1 reminder.");
         foreach ($h1Customers as $customer) {
             if ($customer->status_bayar === 'unpaid') {
                 $msg = "Hallo *{$customer->name}*, pelanggan ND-Hotspot 👋\n\n" .
@@ -60,6 +63,7 @@ class CheckCustomerBilling extends Command
 
         // 1. WhatsApp Reminders (H)
         $dueToday = Customer::whereDate('due_date', $today)->where('status_bayar', 'unpaid')->get();
+        \Log::info("Found " . $dueToday->count() . " customers for Today reminder.");
         foreach ($dueToday as $customer) {
             $msg = "Hallo *{$customer->name}*, pelanggan ND-Hotspot 👋\n\n" .
                    "Terima kasih telah setia menggunakan layanan internet kami.\n" .
@@ -89,6 +93,7 @@ class CheckCustomerBilling extends Command
             ->where('status_bayar', 'unpaid')
             ->where('is_isolated', false)
             ->get();
+        \Log::info("Found " . $toIsolate->count() . " customers to Isolate.");
 
         foreach ($toIsolate as $customer) {
             $this->mikrotik->setUserStatus($customer->name, false);
