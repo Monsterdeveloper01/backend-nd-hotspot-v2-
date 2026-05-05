@@ -33,7 +33,19 @@ class CheckCustomerBilling extends Command
         $tomorrow = Carbon::tomorrow();
         
         $this->info("Checking billing for Today: {$today->toDateString()} and Tomorrow: {$tomorrow->toDateString()}");
-        // 0. WhatsApp Reminders (H-1)
+
+        // 0. Reset Status to 'unpaid' if today is the due_date or passed and they are currently 'paid'
+        $toReset = Customer::whereDate('due_date', '<=', $today)
+            ->where('status_bayar', 'paid')
+            ->get();
+            
+        \Log::info("Found " . $toReset->count() . " customers to reset to unpaid.");
+        foreach ($toReset as $c) {
+            $c->update(['status_bayar' => 'unpaid']);
+            $this->info("Reset status for customer: {$c->name} to unpaid.");
+        }
+
+        // 1. WhatsApp Reminders (H-1)
         $h1Customers = Customer::whereDate('due_date', $tomorrow)->get();
         \Log::info("Found " . $h1Customers->count() . " customers for H-1 reminder.");
         foreach ($h1Customers as $customer) {
