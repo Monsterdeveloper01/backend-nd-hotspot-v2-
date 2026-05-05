@@ -70,31 +70,41 @@ class DashboardController extends Controller
             ->get();
 
         // 3. Online Users (Direct from Mikrotik for non-RADIUS)
-        $mikrotikActive = $this->mikrotik->getActiveUsers();
-        $activeUsernames = array_column($mikrotikActive, 'user');
+        $mikrotikActive = [];
+        try {
+            // Berikan timeout atau pengecekan cepat agar tidak bikin error 500 jika router offline
+            $mikrotikActive = $this->mikrotik->getActiveUsers() ?: [];
+        } catch (\Exception $e) {
+            \Log::warning("Dashboard: Gagal mengambil data aktif dari MikroTik: " . $e->getMessage());
+        }
+
+        $activeUsernames = array_column($mikrotikActive, 'user') ?: [];
         $lowerActiveUsernames = array_map('strtolower', $activeUsernames);
 
-        $onlineVouchers = Voucher::with('plan')
-            ->whereIn('status', ['sold', 'used'])
-            ->whereIn(DB::raw('LOWER(code)'), $lowerActiveUsernames)
-            ->get()
-            ->map(function($v) use ($mikrotikActive, $lowerActiveUsernames) {
-                $mUser = collect($mikrotikActive)->first(function($val) use ($v) {
-                    return strtolower($val['user']) === strtolower($v->code);
+        $onlineVouchers = collect();
+        if (!empty($lowerActiveUsernames)) {
+            $onlineVouchers = Voucher::with('plan')
+                ->whereIn('status', ['sold', 'used'])
+                ->whereIn(DB::raw('LOWER(code)'), $lowerActiveUsernames)
+                ->get()
+                ->map(function($v) use ($mikrotikActive) {
+                    $mUser = collect($mikrotikActive)->first(function($val) use ($v) {
+                        return strtolower($val['user'] ?? '') === strtolower($v->code);
+                    });
+                    return [
+                        'id' => $v->id,
+                        'code' => $v->code,
+                        'plan_name' => $v->plan->name ?? 'Legacy',
+                        'is_online' => true,
+                        'mac_address' => $mUser['mac-address'] ?? ($mUser['address'] ?? $v->mac_address),
+                        'uptime' => $mUser['uptime'] ?? '-',
+                        'bytes_in' => $mUser['bytes-in'] ?? '0',
+                        'bytes_out' => $mUser['bytes-out'] ?? '0',
+                        'used_at' => $v->used_at,
+                        'expires_at' => $v->expires_at,
+                    ];
                 });
-                return [
-                    'id' => $v->id,
-                    'code' => $v->code,
-                    'plan_name' => $v->plan->name ?? 'Legacy',
-                    'is_online' => true,
-                    'mac_address' => $mUser['mac-address'] ?? ($mUser['address'] ?? $v->mac_address),
-                    'uptime' => $mUser['uptime'] ?? '-',
-                    'bytes_in' => $mUser['bytes-in'] ?? '0',
-                    'bytes_out' => $mUser['bytes-out'] ?? '0',
-                    'used_at' => $v->used_at,
-                    'expires_at' => $v->expires_at,
-                ];
-            });
+        }
 
         $offlineVouchers = Voucher::with('plan')
             ->whereIn('status', ['sold', 'used'])
