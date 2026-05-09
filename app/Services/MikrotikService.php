@@ -284,6 +284,40 @@ public function setUserStatus($username, $enabled)
     {
         return $this->removeHotspotUser($username);
     }
+
+    public function getHotspotUserDetailed($username)
+    {
+        if (!$this->connect()) return null;
+        
+        // 1. Ambil data dari /ip/hotspot/user
+        $users = $this->client->comm('/ip/hotspot/user/print', [
+            '?name' => $username
+        ]);
+
+        if (empty($users)) {
+            $this->disconnect();
+            return null;
+        }
+
+        $user = $users[0];
+
+        // 2. Cek apakah sedang aktif (online)
+        $active = $this->client->comm('/ip/hotspot/active/print', [
+            '?user' => $username
+        ]);
+
+        $this->disconnect();
+
+        return [
+            'name' => $user['name'] ?? '',
+            'profile' => $user['profile'] ?? '',
+            'uptime' => $user['uptime'] ?? '0s',
+            'limit_uptime' => $user['limit-uptime'] ?? 'unlimited',
+            'comment' => $user['comment'] ?? '',
+            'is_online' => !empty($active),
+            'active_data' => !empty($active) ? $active[0] : null
+        ];
+    }
 }
 
 /**

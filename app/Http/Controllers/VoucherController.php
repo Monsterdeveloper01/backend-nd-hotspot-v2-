@@ -20,21 +20,58 @@ class VoucherController extends Controller
 
     public function checkVoucher(Request $request)
     {
-        $code = strtoupper($request->query('code'));
+        $code = strtoupper(trim($request->query('code')));
         if (!$code) return response()->json(['message' => 'Kode voucher harus diisi'], 400);
 
+        // 1. Cari di Database Lokal
         $voucher = Voucher::with('plan')->where('code', $code)->first();
+        
+        // 2. Cari data langsung ke MikroTik
+        $mikrotikData = $this->mikrotik->getHotspotUserDetailed($code);
 
-        if (!$voucher) {
-            return response()->json(['message' => 'Voucher tidak ditemukan'], 404);
+        if (!$voucher && !$mikrotikData) {
+            return response()->json(['message' => 'Voucher tidak ditemukan di sistem maupun router'], 404);
         }
 
-        // Sync if it's currently active in Mikrotik but not marked as used yet
-        // (Just in case the background sync hasn't run yet)
-        $this->syncVoucherUsage();
-        $voucher->refresh();
+        // --- Kasus A: Voucher terdaftar di Database Lokal ---
+        if ($voucher) {
+            // Hitung sisa waktu jika sudah terpakai
+            $timeLeft = null;
+            if ($voucher->expires_at) {
+                $diff = now()->diff($voucher->expires_at);
+                if (now()->gt($voucher->expires_at)) {
+                    $timeLeft = "Expired";
+                } else {
+                    $timeLeft = $diff->format('%d hari, %h jam, %i menit');
+                }
+            }
 
-        return response()->json($voucher);
+            return response()->json([
+                'source' => 'database',
+                'code' => $voucher->code,
+                'plan_name' => $voucher->plan->name ?? 'N/A',
+                'price' => $voucher->price,
+                'status' => $voucher->status,
+                'used_at' => $voucher->used_at ? $voucher->used_at->format('d M Y H:i') : 'Belum digunakan',
+                'expires_at' => $voucher->expires_at ? $voucher->expires_at->format('d M Y H:i') : '-',
+                'time_left' => $timeLeft,
+                'is_online' => $mikrotikData['is_online'] ?? false,
+                'mikrotik_uptime' => $mikrotikData['uptime'] ?? null,
+                'mikrotik_limit' => $mikrotikData['limit_uptime'] ?? null,
+            ]);
+        }
+
+        // --- Kasus B: Voucher HANYA ada di MikroTik (Manual/Legacy) ---
+        return response()->json([
+            'source' => 'mikrotik',
+            'code' => $mikrotikData['name'],
+            'plan_name' => 'MikroTik Local User (' . $mikrotikData['profile'] . ')',
+            'status' => 'active_on_router',
+            'uptime' => $mikrotikData['uptime'],
+            'limit_uptime' => $mikrotikData['limit_uptime'],
+            'is_online' => $mikrotikData['is_online'],
+            'message' => 'Voucher terdeteksi langsung di Router.'
+        ]);
     }
 
     public function index(Request $request)
