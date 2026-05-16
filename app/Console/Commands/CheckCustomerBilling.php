@@ -168,7 +168,7 @@ class CheckCustomerBilling extends Command
         $message .= "━━━━━━━━━━━━━━━━━━\n\n";
         $message .= "⏰ <b>Jatuh Tempo Besok (" . $tomorrow->format('d M Y') . "):</b>\n";
         $message .= $h1List . "\n";
-        $message .= "🚫 <b>Pelanggan Terisolir Saat Ini:</b>\n";
+        $message .= "🚫 <b>Pelanggan Pelanggan Terisolir Saat Ini:</b>\n";
         $message .= $isolatedList . "\n";
         $message .= "━━━━━━━━━━━━━━━━━━\n";
         $message .= "<i>Pastikan cek status pembayaran di dashboard sebelum tindakan manual.</i>";
