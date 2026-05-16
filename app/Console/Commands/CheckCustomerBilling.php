@@ -4,54 +4,53 @@ namespace App\Console\Commands;
 
 use Illuminate\Console\Command;
 use App\Models\Customer;
-use App\Services\MikrotikService;
-use App\Services\WhatsAppService;
 use App\Services\TelegramService;
+use App\Jobs\SendWhatsAppJob;
+use App\Jobs\IsolateCustomerJob;
 use Carbon\Carbon;
+use Illuminate\Support\Facades\Log;
 
 class CheckCustomerBilling extends Command
 {
     protected $signature = 'billing:check';
     protected $description = 'Check customer due dates and handle notifications/isolation';
 
-    protected $mikrotik;
-    protected $whatsapp;
     protected $telegram;
 
-    public function __construct(MikrotikService $mikrotik, WhatsAppService $whatsapp, TelegramService $telegram)
+    public function __construct(TelegramService $telegram)
     {
         parent::__construct();
-        $this->mikrotik = $mikrotik;
-        $this->whatsapp = $whatsapp;
         $this->telegram = $telegram;
     }
 
     public function handle()
     {
-        \Log::info("=== Billing Check Started ===");
+        Log::info("=== Billing Check Started ===");
         $today = Carbon::today();
         $tomorrow = Carbon::tomorrow();
         $yesterday = Carbon::yesterday();
         
         $this->info("Checking billing for Today: {$today->toDateString()}");
 
-        // 0. Reset Status to 'unpaid' if today is the due_date or passed and they are currently 'paid'
+        // 0. Reset Status to 'unpaid'
+        // Hanya reset jika status paid DAN due_date SEBELUM/SAMA DENGAN HARI INI
+        // Note: Transaksi sukses harus selalu memajukan due_date agar tidak kena reset ini.
         $toReset = Customer::whereDate('due_date', '<=', $today)
             ->where('status_bayar', 'paid')
             ->get();
             
         foreach ($toReset as $c) {
             $c->update(['status_bayar' => 'unpaid']);
-            \Log::info("User Reset: {$c->name} marked as unpaid (due date reached/passed).");
+            Log::info("User Reset: {$c->name} marked as unpaid (due date reached/passed).");
         }
 
         // 1. WhatsApp Reminders (H-1)
         $h1Customers = Customer::whereDate('due_date', $tomorrow)->get();
         foreach ($h1Customers as $customer) {
             if ($customer->status_bayar === 'unpaid') {
-                $this->sendWhatsAppReminder($customer, "H-1 (Besok)");
+                $this->dispatchWhatsAppReminder($customer, "H-1 (Besok)");
             } else {
-                \Log::info("WA Skip: {$customer->name} (H-1) is already PAID.");
+                Log::info("WA Skip: {$customer->name} (H-1) is already PAID.");
             }
         }
 
@@ -59,9 +58,9 @@ class CheckCustomerBilling extends Command
         $dueToday = Customer::whereDate('due_date', $today)->get();
         foreach ($dueToday as $customer) {
             if ($customer->status_bayar === 'unpaid') {
-                $this->sendWhatsAppReminder($customer, "H (Hari Ini)");
+                $this->dispatchWhatsAppReminder($customer, "H (Hari Ini)");
             } else {
-                \Log::info("WA Skip: {$customer->name} (Today) is already PAID.");
+                Log::info("WA Skip: {$customer->name} (Today) is already PAID.");
             }
         }
 
@@ -69,9 +68,9 @@ class CheckCustomerBilling extends Command
         $hPlus1 = Customer::whereDate('due_date', $yesterday)->get();
         foreach ($hPlus1 as $customer) {
             if ($customer->status_bayar === 'unpaid') {
-                $this->sendWhatsAppReminder($customer, "H+1 (Terlambat)");
+                $this->dispatchWhatsAppReminder($customer, "H+1 (Terlambat)");
             } else {
-                \Log::info("WA Skip: {$customer->name} (H+1) is already PAID.");
+                Log::info("WA Skip: {$customer->name} (H+1) is already PAID.");
             }
         }
 
@@ -83,25 +82,27 @@ class CheckCustomerBilling extends Command
             ->get();
 
         foreach ($toIsolate as $customer) {
-            $this->mikrotik->setUserStatus($customer->name, false);
-            $this->mikrotik->clearUserActiveSessions($customer->name);
-            $this->mikrotik->clearUserCookies($customer->name);
+            Log::info("Queueing ISOLASI for: {$customer->name}");
+            
+            // Dispatch Mikrotik Isolation Job
+            IsolateCustomerJob::dispatch($customer);
 
-            $customer->is_isolated = true;
-            $customer->save();
-
-            \Log::info("ISOLASI: {$customer->name} berhasil diisolir.");
-            $this->sendWhatsAppIsolation($customer);
+            // Dispatch WhatsApp Notification for Isolation
+            $this->dispatchWhatsAppIsolation($customer);
         }
 
         // 5. Telegram Report
-        $this->sendTelegramSummary($tomorrow);
+        try {
+            $this->sendTelegramSummary($tomorrow);
+        } catch (\Exception $e) {
+            Log::error("Failed to send Telegram summary: " . $e->getMessage());
+        }
         
-        \Log::info("=== Billing Check Completed ===");
-        $this->info('Billing check and Telegram summary completed.');
+        Log::info("=== Billing Check Completed ===");
+        $this->info('Billing check and Telegram summary completed (Jobs dispatched).');
     }
 
-    private function sendWhatsAppReminder($customer, $label)
+    private function dispatchWhatsAppReminder($customer, $label)
     {
         $statusLabel = ($label == "H (Hari Ini)") ? "*JATUH TEMPO HARI INI*" : (($label == "H+1 (Terlambat)") ? "*SUDAH MELEWATI JATUH TEMPO*" : "*BESOK* (" . $customer->due_date->format('d/m/Y') . ")");
         
@@ -117,15 +118,11 @@ class CheckCustomerBilling extends Command
                "Hormat kami,\n" .
                "*ND-Hotspot* 💡";
 
-        $res = $this->whatsapp->sendMessage($customer->whatsapp, $msg);
-        if ($res) {
-            \Log::info("WA Sent: {$customer->name} ({$label}) success.");
-        } else {
-            \Log::error("WA Failed: {$customer->name} ({$label}) gateway error.");
-        }
+        SendWhatsAppJob::dispatch($customer->whatsapp, $msg, "WA Reminder {$label}");
+        Log::info("Queued WA Reminder ({$label}) for {$customer->name}.");
     }
 
-    private function sendWhatsAppIsolation($customer)
+    private function dispatchWhatsAppIsolation($customer)
     {
         $msg = "🚫 *LAYANAN TERISOLIR*\n\n" .
                "Hallo *{$customer->name}*,\n" .
@@ -136,7 +133,8 @@ class CheckCustomerBilling extends Command
                "Hormat kami,\n" .
                "*ND-Hotspot* 💡";
 
-        $this->whatsapp->sendMessage($customer->whatsapp, $msg);
+        SendWhatsAppJob::dispatch($customer->whatsapp, $msg, "WA Isolation");
+        Log::info("Queued WA Isolation for {$customer->name}.");
     }
 
     private function sendTelegramSummary($tomorrow)
@@ -168,7 +166,7 @@ class CheckCustomerBilling extends Command
         $message .= "━━━━━━━━━━━━━━━━━━\n\n";
         $message .= "⏰ <b>Jatuh Tempo Besok (" . $tomorrow->format('d M Y') . "):</b>\n";
         $message .= $h1List . "\n";
-        $message .= "🚫 <b>Pelanggan Pelanggan Terisolir Saat Ini:</b>\n";
+        $message .= "🚫 <b>Pelanggan Terisolir Saat Ini:</b>\n";
         $message .= $isolatedList . "\n";
         $message .= "━━━━━━━━━━━━━━━━━━\n";
         $message .= "<i>Pastikan cek status pembayaran di dashboard sebelum tindakan manual.</i>";
