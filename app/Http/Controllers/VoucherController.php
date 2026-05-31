@@ -151,14 +151,21 @@ class VoucherController extends Controller
         }
     }
 
-    public function soldVouchers()
+    public function soldVouchers(\Illuminate\Http\Request $request)
     {
-        // Get vouchers that have been used and have expired
-        return Voucher::with('plan')
+        $query = Voucher::with('plan')
             ->whereIn('status', ['used', 'expired'])
-            ->where('expires_at', '<=', now())
-            ->orderBy('expires_at', 'desc')
-            ->paginate(15);
+            ->where('expires_at', '<=', now());
+
+        if ($request->has('search') && $request->search != '') {
+            $search = $request->search;
+            $query->where(function($q) use ($search) {
+                $q->where('code', 'like', "%{$search}%")
+                  ->orWhere('customer_phone', 'like', "%{$search}%");
+            });
+        }
+
+        return $query->orderBy('expires_at', 'desc')->paginate(15);
     }
 
     public function getLogs()
