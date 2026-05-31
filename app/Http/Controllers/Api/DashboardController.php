@@ -74,6 +74,16 @@ class DashboardController extends Controller
             ->groupBy('date')
             ->get();
 
+        // Voucher Chart (Last 30 Days)
+        $last30Days = Carbon::today()->subDays(29);
+        $voucherChartData = DB::table('transactions')
+            ->select(DB::raw('DATE(created_at) as date'), DB::raw('SUM(amount) as total'))
+            ->where('status', 'success')
+            ->where('created_at', '>=', $last30Days)
+            ->where('external_id', 'like', 'ND-%')
+            ->groupBy('date')
+            ->get();
+
         // 3. Online Users (Direct from Mikrotik for non-RADIUS)
         $mikrotikActive = [];
         try {
@@ -152,6 +162,7 @@ class DashboardController extends Controller
                 'online_count' => count($onlineVouchers),
             ],
             'chart' => $chartData,
+            'voucher_chart' => $voucherChartData,
             'combined_users' => $combinedUsers,
             'recent_transactions' => $recentTransactions
         ]);
