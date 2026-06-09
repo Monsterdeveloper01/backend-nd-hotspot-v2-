@@ -13,6 +13,8 @@ use Illuminate\Support\Str;
 use Carbon\Carbon;
 use Midtrans\Config;
 use Midtrans\CoreApi;
+use PhpMqtt\Client\MqttClient;
+use PhpMqtt\Client\ConnectionSettings;
 
 class TransactionController extends Controller
 {
@@ -86,6 +88,74 @@ class TransactionController extends Controller
         }
     }
 
+    private function generateAudioSequence($amount, $issuer)
+    {
+        $sequence = [];
+        $sequence[] = 1; // "Diterima"
+
+        // Mengubah nominal menjadi array urutan MP3 menggunakan fungsi Terbilang
+        $audioNominal = $this->convertAngkaToAudioArray((int) $amount);
+        $sequence = array_merge($sequence, $audioNominal);
+
+        $sequence[] = 3; // "Rupiah"
+        $sequence[] = 4; // "Dari"
+
+        // Mapping Issuer Midtrans ke ID File MP3
+        $issuerMap = [
+            'gopay' => 5,
+            'shopeepay' => 6,
+            'bni' => 7,
+            'qris' => 8 // Default QRIS
+        ];
+
+        $issuerKey = strtolower($issuer);
+        $sequence[] = $issuerMap[$issuerKey] ?? 8;
+
+        return implode(',', $sequence);
+    }
+
+    private function convertAngkaToAudioArray($angka) 
+    {
+        $angka = abs($angka);
+        $audio = [];
+
+        $satuan = [
+            1 => 11, 2 => 12, 3 => 13, 4 => 14, 5 => 15, 
+            6 => 16, 7 => 17, 8 => 18, 9 => 19
+        ];
+
+        if ($angka < 10) {
+            if ($angka > 0) $audio[] = $satuan[$angka];
+        } elseif ($angka == 10) {
+            $audio[] = 20; // Sepuluh
+        } elseif ($angka == 11) {
+            $audio[] = 21; // Sebelas
+        } elseif ($angka < 20) {
+            $audio[] = $satuan[$angka - 10]; 
+            $audio[] = 22; // Belas
+        } elseif ($angka < 100) {
+            $audio = array_merge($audio, $this->convertAngkaToAudioArray((int)($angka / 10)));
+            $audio[] = 30; // Puluh
+            $audio = array_merge($audio, $this->convertAngkaToAudioArray($angka % 10));
+        } elseif ($angka < 200) {
+            $audio[] = 41; // Seratus
+            $audio = array_merge($audio, $this->convertAngkaToAudioArray($angka - 100));
+        } elseif ($angka < 1000) {
+            $audio = array_merge($audio, $this->convertAngkaToAudioArray((int)($angka / 100)));
+            $audio[] = 40; // Ratus
+            $audio = array_merge($audio, $this->convertAngkaToAudioArray($angka % 100));
+        } elseif ($angka < 2000) {
+            $audio[] = 51; // Seribu
+            $audio = array_merge($audio, $this->convertAngkaToAudioArray($angka - 1000));
+        } elseif ($angka < 1000000) {
+            $audio = array_merge($audio, $this->convertAngkaToAudioArray((int)($angka / 1000)));
+            $audio[] = 50; // Ribu
+            $audio = array_merge($audio, $this->convertAngkaToAudioArray($angka % 1000));
+        }
+
+        return $audio;
+    }
+
     public function callback(Request $request)
     {
         \Log::info('MIDTRANS CALLBACK RECEIVED', $request->all());
@@ -107,6 +177,51 @@ class TransactionController extends Controller
                 'payload' => $orderId . $statusCode . $grossAmount . $serverKey
             ]);
             return response()->json(['message' => 'Invalid signature'], 403);
+        }
+
+        if ($request->payment_type == 'qris' && in_array($request->transaction_status, ['settlement', 'capture'])) {
+            
+            $isSystemGenerated = Transaction::where('external_id', $orderId)->exists() || str_starts_with($orderId, 'BILL-');
+            
+            if (!$isSystemGenerated) {
+                \Log::info('STATIC QRIS PAYMENT RECEIVED', ['order_id' => $orderId, 'amount' => $grossAmount]);
+                
+                $adminPhone = '628129588587'; 
+                $issuer = strtoupper($request->issuer ?? 'QRIS');
+                $amountFormatted = number_format($grossAmount, 0, ',', '.');
+                
+                // 1. Kirim WA ke Admin
+                $msgAdmin = "🔔 *PEMBAYARAN QRIS STATIS MASUK*\n\n" .
+                            "Dana sebesar *Rp {$amountFormatted}* berhasil diterima.\n" .
+                            "🏢 *Sumber:* {$issuer}\n" .
+                            "🆔 *Order ID:* {$orderId}";
+                try {
+                    $this->wa->sendMessage($adminPhone, $msgAdmin);
+                } catch (\Exception $e) {
+                    \Log::error('WA ADMIN STATIC QRIS FAILED', ['error' => $e->getMessage()]);
+                }
+
+                // 2. Tembak Perintah ke Hardware ESP8266 via MQTT
+                try {
+                    // Gunakan floatval/intval karena Midtrans mengirimkan format "50000.00"
+                    $amountForHardware = (int) floatval($grossAmount);
+                    $mqttPayload = $this->generateAudioSequence($amountForHardware, $request->issuer ?? 'qris');
+                    
+                    // Membuat Client ID unik agar webhook yang masuk bersamaan tidak saling menendang koneksi
+                    $uniqueClientId = env('MQTT_CLIENT_ID', 'Laravel_Backend') . '_' . uniqid();
+                    
+                    $mqtt = new MqttClient(env('MQTT_HOST'), env('MQTT_PORT'), $uniqueClientId);
+                    $mqtt->connect();
+                    $mqtt->publish('qris/soundbox/midtrans', $mqttPayload, 0); 
+                    $mqtt->disconnect();
+                    
+                    \Log::info('SOUNDBOX HARDWARE TRIGGERED', ['payload' => $mqttPayload, 'amount' => $amountForHardware]);
+                } catch (\Exception $e) {
+                    \Log::error('MQTT PUBLISH FAILED', ['error' => $e->getMessage()]);
+                }
+
+                return response()->json(['message' => 'Static QRIS Handled and Hardware Triggered']);
+            }
         }
 
         // Handle Customer Billing Payment
