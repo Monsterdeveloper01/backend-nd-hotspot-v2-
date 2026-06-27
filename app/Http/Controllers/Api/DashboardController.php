@@ -67,8 +67,25 @@ class DashboardController extends Controller
             ->count();
             
         // Network Health (ONUs)
-        $offlineOnus = \App\Models\OnuNode::where('status', 'offline')->count();
-        $totalOnus = \App\Models\OnuNode::count();
+        $olts = \App\Models\OltConfig::all();
+        $oltStats = [];
+        $offlineOnus = 0;
+        $totalOnus = 0;
+        
+        foreach ($olts as $olt) {
+            $online = \App\Models\OnuNode::where('olt_id', $olt->id)->where('status', 'online')->count();
+            $offline = \App\Models\OnuNode::where('olt_id', $olt->id)->where('status', 'offline')->count();
+            
+            $offlineOnus += $offline;
+            $totalOnus += ($online + $offline);
+            
+            $oltStats[] = [
+                'id' => $olt->id,
+                'name' => $olt->name,
+                'online' => $online,
+                'offline' => $offline
+            ];
+        }
 
         // 2. Chart Data (Daily revenue this month)
         $chartData = DB::table('transactions')
@@ -166,6 +183,7 @@ class DashboardController extends Controller
                 'online_count' => count($onlineVouchers),
                 'offline_onus' => $offlineOnus,
                 'total_onus' => $totalOnus,
+                'olt_stats' => $oltStats,
             ],
             'chart' => $chartData,
             'voucher_chart' => $voucherChartData,
