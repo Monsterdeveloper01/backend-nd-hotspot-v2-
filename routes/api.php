@@ -70,6 +70,8 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/olt/{id}/status', [\App\Http\Controllers\Api\NetworkCenterController::class, 'getStatus']);
     
     Route::post('/network/olts', [\App\Http\Controllers\Api\NetworkCenterController::class, 'storeOlt']);
+    Route::put('/network/olts/{id}', [\App\Http\Controllers\Api\NetworkCenterController::class, 'updateOlt']);
+    Route::delete('/network/olts/{id}', [\App\Http\Controllers\Api\NetworkCenterController::class, 'deleteOlt']);
     Route::put('/network/nodes/{id}', [\App\Http\Controllers\Api\NetworkCenterController::class, 'updateNode']);
     Route::post('/network/nodes/{id}/reboot', [\App\Http\Controllers\Api\NetworkCenterController::class, 'reboot']);
 

@@ -89,11 +89,44 @@ class NetworkCenterController extends Controller
             'ip_address' => 'required|string',
             'username' => 'required|string',
             'password' => 'required|string',
-            'type' => 'required|string'
+            'type' => 'required|string',
+            'snmp_community' => 'nullable|string'
         ]);
+
+        if (empty($validated['snmp_community'])) {
+            $validated['snmp_community'] = 'public';
+        }
 
         $olt = OltConfig::create($validated);
         return response()->json($olt);
+    }
+
+    public function updateOlt(Request $request, $id)
+    {
+        $olt = OltConfig::findOrFail($id);
+        
+        $validated = $request->validate([
+            'name' => 'required|string',
+            'ip_address' => 'required|string',
+            'username' => 'required|string',
+            'password' => 'required|string',
+            'type' => 'required|string',
+            'snmp_community' => 'nullable|string'
+        ]);
+
+        if (empty($validated['snmp_community'])) {
+            $validated['snmp_community'] = 'public';
+        }
+
+        $olt->update($validated);
+        return response()->json($olt);
+    }
+
+    public function deleteOlt($id)
+    {
+        $olt = OltConfig::findOrFail($id);
+        $olt->delete();
+        return response()->json(['message' => 'OLT berhasil dihapus']);
     }
 
     public function updateNode(Request $request, $id)
