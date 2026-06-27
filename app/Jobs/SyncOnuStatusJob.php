@@ -45,15 +45,22 @@ class SyncOnuStatusJob implements ShouldQueue
 
             $wasOnline = $existingNode ? $existingNode->status === 'online' : false;
 
+            $updateData = [
+                'serial_number' => $onuData['serial_number'],
+                'last_signal' => $onuData['signal'],
+                'status' => $onuData['status'],
+                'last_check' => now(),
+                'last_seen_at' => $onuData['status'] === 'online' ? now() : ($existingNode->last_seen_at ?? null),
+            ];
+
+            // Only update alias if it was successfully fetched from OLT
+            if (!empty($onuData['alias'])) {
+                $updateData['alias'] = $onuData['alias'];
+            }
+
             $node = OnuNode::updateOrCreate(
                 ['olt_id' => $this->olt->id, 'onu_index' => $onuData['onu_index']],
-                [
-                    'serial_number' => $onuData['serial_number'],
-                    'last_signal' => $onuData['signal'],
-                    'status' => $onuData['status'],
-                    'last_check' => now(),
-                    'last_seen_at' => $onuData['status'] === 'online' ? now() : ($existingNode->last_seen_at ?? null),
-                ]
+                $updateData
             );
 
             if ($wasOnline && $onuData['status'] === 'offline') {

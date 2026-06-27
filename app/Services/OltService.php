@@ -81,16 +81,19 @@ class OltService
             $snOid = '.1.3.6.1.4.1.37950.1.1.6.1.1.2.1.5.1'; 
             $statusOid = '.1.3.6.1.4.1.37950.1.1.6.1.1.1.1.5.1'; // Operational Status (3 = working)
             $signalOid = null; // Signal implementation for C-DATA pending
+            $aliasOid = '.1.3.6.1.4.1.37950.1.1.6.1.1.3.1.8.1'; // Common C-DATA Alias OID
         } else {
             // Default V-SOL GPON OIDs
             $snOid = '.1.3.6.1.4.1.37582.89.53.1.1.1.1.2'; 
             $statusOid = '.1.3.6.1.4.1.37582.89.53.1.1.1.1.5';
             $signalOid = '.1.3.6.1.4.1.37582.89.53.1.1.1.1.8';
+            $aliasOid = '.1.3.6.1.4.1.37582.89.53.1.1.1.1.14'; // V-SOL Description
         }
 
         $snData = $this->snmpWalk($olt->ip_address, $olt->snmp_community, $snOid);
         $statusData = $this->snmpWalk($olt->ip_address, $olt->snmp_community, $statusOid);
         $signalData = $signalOid ? $this->snmpWalk($olt->ip_address, $olt->snmp_community, $signalOid) : [];
+        $aliasData = $aliasOid ? $this->snmpWalk($olt->ip_address, $olt->snmp_community, $aliasOid) : [];
 
         foreach ($snData as $oid => $val) {
             $parts = explode('.', trim($oid, '.'));
@@ -105,8 +108,20 @@ class OltService
                 'onu_index' => $index,
                 'serial_number' => $valClean,
                 'status' => 'offline',
-                'signal' => null
+                'signal' => null,
+                'alias' => null
             ];
+        }
+
+        foreach ($aliasData as $oid => $val) {
+            $parts = explode('.', trim($oid, '.'));
+            $index = end($parts);
+            if (isset($onus[$index])) {
+                $valClean = $this->cleanSnmpValue($val);
+                if (!empty($valClean) && stripos($valClean, 'no such object') === false) {
+                    $onus[$index]['alias'] = $valClean;
+                }
+            }
         }
 
         foreach ($statusData as $oid => $val) {

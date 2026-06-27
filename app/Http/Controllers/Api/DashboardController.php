@@ -65,6 +65,10 @@ class DashboardController extends Controller
             ->where('created_at', '>=', $today)
             ->where('external_id', 'like', 'ND-%')
             ->count();
+            
+        // Network Health (ONUs)
+        $offlineOnus = \App\Models\OnuNode::where('status', 'offline')->count();
+        $totalOnus = \App\Models\OnuNode::count();
 
         // 2. Chart Data (Daily revenue this month)
         $chartData = DB::table('transactions')
@@ -160,6 +164,8 @@ class DashboardController extends Controller
                 'isolated_customers' => $isolatedCustomers,
                 'voucher_sold_today' => $voucherSoldToday,
                 'online_count' => count($onlineVouchers),
+                'offline_onus' => $offlineOnus,
+                'total_onus' => $totalOnus,
             ],
             'chart' => $chartData,
             'voucher_chart' => $voucherChartData,
