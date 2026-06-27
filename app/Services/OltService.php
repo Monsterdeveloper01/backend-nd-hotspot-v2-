@@ -79,7 +79,7 @@ class OltService
         if ($sysObjectId && strpos($sysObjectId, '37950') !== false) {
             // C-DATA GPON OIDs
             $snOid = '.1.3.6.1.4.1.37950.1.1.6.1.1.2.1.5.1'; 
-            $statusOid = '.1.3.6.1.4.1.37950.1.1.6.1.1.2.1.4.1';
+            $statusOid = '.1.3.6.1.4.1.37950.1.1.6.1.1.1.1.5.1'; // Operational Status (3 = working)
             $signalOid = null; // Signal implementation for C-DATA pending
         } else {
             // Default V-SOL GPON OIDs
@@ -132,7 +132,7 @@ class OltService
     {
         $sysObjectId = $this->snmpGet($olt->ip_address, $olt->snmp_community, '.1.3.6.1.2.1.1.2.0');
         if ($sysObjectId && strpos($sysObjectId, '37950') !== false) {
-            $statusOid = '.1.3.6.1.4.1.37950.1.1.6.1.1.2.1.4.1.' . $onuIndex;
+            $statusOid = '.1.3.6.1.4.1.37950.1.1.6.1.1.1.1.5.1.' . $onuIndex;
         } else {
             $statusOid = '.1.3.6.1.4.1.37582.89.53.1.1.1.1.5.' . $onuIndex;
         }
@@ -153,7 +153,9 @@ class OltService
     public function parseOnuStatus($value)
     {
         $value = (int)$value;
-        if ($value === 1) return 'online';
+        // V-SOL: 1 = online
+        // C-DATA: 3 = working/online
+        if ($value === 1 || $value === 3) return 'online';
         return 'offline';
     }
     

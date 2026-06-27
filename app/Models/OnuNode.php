@@ -16,6 +16,7 @@ class OnuNode extends Model
         'last_temp',
         'client_count',
         'last_check',
+        'last_seen_at',
         'status'
     ];
 
