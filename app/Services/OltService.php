@@ -73,27 +73,51 @@ class OltService
     {
         $onus = [];
         
-        // Detect OLT Type by checking sysObjectID (e.g. 37950 = C-DATA, 37582 = V-SOL)
-        $sysObjectId = $this->snmpGet($olt->ip_address, $olt->snmp_community, '.1.3.6.1.2.1.1.2.0');
-        
-        if ($sysObjectId && strpos($sysObjectId, '37950') !== false) {
-            // C-DATA GPON OIDs
-            $snOid = '.1.3.6.1.4.1.37950.1.1.6.1.1.2.1.5.1'; 
-            $statusOid = '.1.3.6.1.4.1.37950.1.1.6.1.1.1.1.5.1'; // Operational Status (3 = working)
-            $signalOid = null; // Signal implementation for C-DATA pending
-            $aliasOid = '.1.3.6.1.4.1.37950.1.1.6.1.1.3.1.8.1'; // Common C-DATA Alias OID
-        } else {
-            // Default V-SOL GPON OIDs
-            $snOid = '.1.3.6.1.4.1.37582.89.53.1.1.1.1.2'; 
-            $statusOid = '.1.3.6.1.4.1.37582.89.53.1.1.1.1.5';
-            $signalOid = '.1.3.6.1.4.1.37582.89.53.1.1.1.1.8';
-            $aliasOid = '.1.3.6.1.4.1.37582.89.53.1.1.1.1.14'; // V-SOL Description
+        $profiles = [
+            // C-DATA GPON
+            [
+                'snOid' => '.1.3.6.1.4.1.37950.1.1.6.1.1.2.1.5.1', 
+                'statusOid' => '.1.3.6.1.4.1.37950.1.1.6.1.1.1.1.5.1',
+                'signalOid' => null,
+                'aliasOid' => '.1.3.6.1.4.1.37950.1.1.6.1.1.3.1.8.1',
+            ],
+            // V-SOL GPON
+            [
+                'snOid' => '.1.3.6.1.4.1.37582.89.53.1.1.1.1.2', 
+                'statusOid' => '.1.3.6.1.4.1.37582.89.53.1.1.1.1.5',
+                'signalOid' => '.1.3.6.1.4.1.37582.89.53.1.1.1.1.8',
+                'aliasOid' => '.1.3.6.1.4.1.37582.89.53.1.1.1.1.14',
+            ],
+            // HSGQ GPON
+            [
+                'snOid' => '.1.3.6.1.4.1.50256.89.53.1.1.1.1.2', 
+                'statusOid' => '.1.3.6.1.4.1.50256.89.53.1.1.1.1.5',
+                'signalOid' => '.1.3.6.1.4.1.50256.89.53.1.1.1.1.8',
+                'aliasOid' => '.1.3.6.1.4.1.50256.89.53.1.1.1.1.14',
+            ]
+        ];
+
+        $matchedProfile = null;
+        $snData = [];
+
+        foreach ($profiles as $profile) {
+            $data = $this->snmpWalk($olt->ip_address, $olt->snmp_community, $profile['snOid']);
+            if (!empty($data)) {
+                $firstVal = array_values($data)[0] ?? '';
+                $clean = $this->cleanSnmpValue($firstVal);
+                if (!empty($clean) && stripos($clean, 'no such') === false) {
+                    $matchedProfile = $profile;
+                    $snData = $data;
+                    break;
+                }
+            }
         }
 
-        $snData = $this->snmpWalk($olt->ip_address, $olt->snmp_community, $snOid);
-        $statusData = $this->snmpWalk($olt->ip_address, $olt->snmp_community, $statusOid);
-        $signalData = $signalOid ? $this->snmpWalk($olt->ip_address, $olt->snmp_community, $signalOid) : [];
-        $aliasData = $aliasOid ? $this->snmpWalk($olt->ip_address, $olt->snmp_community, $aliasOid) : [];
+        if (!$matchedProfile) return [];
+
+        $statusData = $this->snmpWalk($olt->ip_address, $olt->snmp_community, $matchedProfile['statusOid']);
+        $signalData = $matchedProfile['signalOid'] ? $this->snmpWalk($olt->ip_address, $olt->snmp_community, $matchedProfile['signalOid']) : [];
+        $aliasData = $matchedProfile['aliasOid'] ? $this->snmpWalk($olt->ip_address, $olt->snmp_community, $matchedProfile['aliasOid']) : [];
 
         foreach ($snData as $oid => $val) {
             $parts = explode('.', trim($oid, '.'));
@@ -145,15 +169,21 @@ class OltService
 
     public function getOnuStatus(OltConfig $olt, $onuIndex)
     {
-        $sysObjectId = $this->snmpGet($olt->ip_address, $olt->snmp_community, '.1.3.6.1.2.1.1.2.0');
-        if ($sysObjectId && strpos($sysObjectId, '37950') !== false) {
-            $statusOid = '.1.3.6.1.4.1.37950.1.1.6.1.1.1.1.5.1.' . $onuIndex;
-        } else {
-            $statusOid = '.1.3.6.1.4.1.37582.89.53.1.1.1.1.5.' . $onuIndex;
+        $profiles = [
+            '.1.3.6.1.4.1.37950.1.1.6.1.1.1.1.5.1', // C-DATA
+            '.1.3.6.1.4.1.37582.89.53.1.1.1.1.5',   // V-SOL
+            '.1.3.6.1.4.1.50256.89.53.1.1.1.1.5'    // HSGQ
+        ];
+
+        foreach ($profiles as $baseOid) {
+            $val = $this->snmpGet($olt->ip_address, $olt->snmp_community, $baseOid . '.' . $onuIndex);
+            $clean = $this->cleanSnmpValue($val);
+            if (!empty($clean) && stripos($clean, 'no such') === false) {
+                return $this->parseOnuStatus($clean);
+            }
         }
         
-        $val = $this->snmpGet($olt->ip_address, $olt->snmp_community, $statusOid);
-        return $val ? $this->parseOnuStatus($val) : 'offline';
+        return 'offline';
     }
 
     public function convertSignal($value)
