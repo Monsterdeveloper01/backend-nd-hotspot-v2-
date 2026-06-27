@@ -29,7 +29,18 @@ class NetworkCenterController extends Controller
             $node->signal_quality = $this->getSignalQuality($node->last_signal);
             return $node;
         });
-        return response()->json($nodes);
+
+        $olt = OltConfig::find($id);
+
+        return response()->json([
+            'data' => $nodes,
+            'meta' => [
+                'total' => $nodes->count(),
+                'online' => $nodes->where('status', 'online')->count(),
+                'offline' => $nodes->where('status', 'offline')->count(),
+                'last_synced_at' => $olt ? $olt->last_synced_at : null
+            ]
+        ]);
     }
 
     public function getOnuLive($id)
