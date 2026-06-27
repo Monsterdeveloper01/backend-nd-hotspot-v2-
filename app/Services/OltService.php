@@ -72,22 +72,38 @@ class OltService
     public function getAllOnu(OltConfig $olt)
     {
         $onus = [];
-        // V-SOL specific OIDs
-        $snOid = '.1.3.6.1.4.1.37582.89.53.1.1.1.1.2'; 
-        $statusOid = '.1.3.6.1.4.1.37582.89.53.1.1.1.1.5';
-        $signalOid = '.1.3.6.1.4.1.37582.89.53.1.1.1.1.8';
+        
+        // Detect OLT Type by checking sysObjectID (e.g. 37950 = C-DATA, 37582 = V-SOL)
+        $sysObjectId = $this->snmpGet($olt->ip_address, $olt->snmp_community, '.1.3.6.1.2.1.1.2.0');
+        
+        if ($sysObjectId && strpos($sysObjectId, '37950') !== false) {
+            // C-DATA GPON OIDs
+            $snOid = '.1.3.6.1.4.1.37950.1.1.6.1.1.2.1.5.1'; 
+            $statusOid = '.1.3.6.1.4.1.37950.1.1.6.1.1.2.1.4.1';
+            $signalOid = null; // Signal implementation for C-DATA pending
+        } else {
+            // Default V-SOL GPON OIDs
+            $snOid = '.1.3.6.1.4.1.37582.89.53.1.1.1.1.2'; 
+            $statusOid = '.1.3.6.1.4.1.37582.89.53.1.1.1.1.5';
+            $signalOid = '.1.3.6.1.4.1.37582.89.53.1.1.1.1.8';
+        }
 
         $snData = $this->snmpWalk($olt->ip_address, $olt->snmp_community, $snOid);
         $statusData = $this->snmpWalk($olt->ip_address, $olt->snmp_community, $statusOid);
-        $signalData = $this->snmpWalk($olt->ip_address, $olt->snmp_community, $signalOid);
+        $signalData = $signalOid ? $this->snmpWalk($olt->ip_address, $olt->snmp_community, $signalOid) : [];
 
         foreach ($snData as $oid => $val) {
             $parts = explode('.', trim($oid, '.'));
             $index = end($parts);
             
+            $valClean = $this->cleanSnmpValue($val);
+            if (empty($valClean) || stripos($valClean, 'no such object') !== false || stripos($valClean, 'no such instance') !== false) {
+                continue;
+            }
+            
             $onus[$index] = [
                 'onu_index' => $index,
-                'serial_number' => $this->cleanSnmpValue($val),
+                'serial_number' => $valClean,
                 'status' => 'offline',
                 'signal' => null
             ];
@@ -114,7 +130,13 @@ class OltService
 
     public function getOnuStatus(OltConfig $olt, $onuIndex)
     {
-        $statusOid = '.1.3.6.1.4.1.37582.89.53.1.1.1.1.5.' . $onuIndex;
+        $sysObjectId = $this->snmpGet($olt->ip_address, $olt->snmp_community, '.1.3.6.1.2.1.1.2.0');
+        if ($sysObjectId && strpos($sysObjectId, '37950') !== false) {
+            $statusOid = '.1.3.6.1.4.1.37950.1.1.6.1.1.2.1.4.1.' . $onuIndex;
+        } else {
+            $statusOid = '.1.3.6.1.4.1.37582.89.53.1.1.1.1.5.' . $onuIndex;
+        }
+        
         $val = $this->snmpGet($olt->ip_address, $olt->snmp_community, $statusOid);
         return $val ? $this->parseOnuStatus($val) : 'offline';
     }
