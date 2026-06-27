@@ -3,9 +3,7 @@
 namespace App\Services;
 
 use App\Models\OltConfig;
-use App\Models\OnuNode;
 use Illuminate\Support\Facades\Log;
-use RuntimeException;
 
 class OltService
 {
@@ -14,27 +12,44 @@ class OltService
 
     public function __construct()
     {
-        if (!function_exists('snmp2_walk')) {
-            throw new RuntimeException('PHP SNMP extension tidak aktif.');
-        }
-
-        $this->timeout = config('snmp.timeout', 3000000);
+        // Timeout in config is in microseconds for snmp2_walk (e.g. 3000000 = 3s).
+        // For shell_exec we convert it to seconds.
+        $this->timeout = max(1, round(config('snmp.timeout', 3000000) / 1000000));
         $this->retries = config('snmp.retries', 1);
     }
 
     public function snmpWalk($ip, $community, $oid)
     {
-        snmp_set_oid_output_format(SNMP_OID_OUTPUT_NUMERIC);
-        $result = @snmp2_real_walk($ip, $community, $oid, $this->timeout, $this->retries);
-        return $result !== false ? $result : [];
+        // -v2c: SNMP version 2c
+        // -c: Community string
+        // -t: Timeout in seconds
+        // -r: Retries
+        // -On: Output numeric OID
+        // -Oq: Quick print (simplifies values, e.g. STRING: "value" becomes "value")
+        $command = escapeshellcmd("snmpwalk -v2c -c {$community} -t {$this->timeout} -r {$this->retries} -On -Oq {$ip} {$oid}") . " 2>/dev/null";
+        $output = shell_exec($command);
+        
+        $result = [];
+        if ($output) {
+            $lines = explode("\n", trim($output));
+            foreach ($lines as $line) {
+                if (strpos($line, ' ') !== false) {
+                    list($key, $val) = explode(' ', $line, 2);
+                    $result[trim($key)] = trim($val);
+                }
+            }
+        }
+        return $result;
     }
 
     public function snmpGet($ip, $community, $oid)
     {
-        $result = @snmp2_get($ip, $community, $oid, $this->timeout, $this->retries);
-        if ($result !== false) {
-            $parts = explode(':', $result, 2);
-            return isset($parts[1]) ? trim(str_replace('"', '', $parts[1])) : trim($result);
+        $command = escapeshellcmd("snmpget -v2c -c {$community} -t {$this->timeout} -r {$this->retries} -On -Oq {$ip} {$oid}") . " 2>/dev/null";
+        $output = shell_exec($command);
+        
+        if ($output && strpos($output, ' ') !== false) {
+            list($key, $val) = explode(' ', trim($output), 2);
+            return trim(str_replace('"', '', $val));
         }
         return null;
     }
@@ -67,7 +82,7 @@ class OltService
         $signalData = $this->snmpWalk($olt->ip_address, $olt->snmp_community, $signalOid);
 
         foreach ($snData as $oid => $val) {
-            $parts = explode('.', $oid);
+            $parts = explode('.', trim($oid, '.'));
             $index = end($parts);
             
             $onus[$index] = [
@@ -79,7 +94,7 @@ class OltService
         }
 
         foreach ($statusData as $oid => $val) {
-            $parts = explode('.', $oid);
+            $parts = explode('.', trim($oid, '.'));
             $index = end($parts);
             if (isset($onus[$index])) {
                 $onus[$index]['status'] = $this->parseOnuStatus($this->cleanSnmpValue($val));
@@ -87,7 +102,7 @@ class OltService
         }
 
         foreach ($signalData as $oid => $val) {
-            $parts = explode('.', $oid);
+            $parts = explode('.', trim($oid, '.'));
             $index = end($parts);
             if (isset($onus[$index])) {
                 $onus[$index]['signal'] = $this->convertSignal($this->cleanSnmpValue($val));
@@ -122,7 +137,6 @@ class OltService
     
     private function cleanSnmpValue($val)
     {
-        $parts = explode(':', $val, 2);
-        return isset($parts[1]) ? trim(str_replace('"', '', $parts[1])) : trim($val);
+        return trim(str_replace(['"', 'STRING:', 'INTEGER:'], '', $val));
     }
 }
