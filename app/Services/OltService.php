@@ -5,64 +5,124 @@ namespace App\Services;
 use App\Models\OltConfig;
 use App\Models\OnuNode;
 use Illuminate\Support\Facades\Log;
+use RuntimeException;
 
 class OltService
 {
-    /**
-     * Fetch all ONUs from OLT and sync to local database
-     */
-    public function syncOnus(OltConfig $olt)
-    {
-        // This is a placeholder for real OLT communication
-        // Real implementation would use SNMP (snmpwalk) or Telnet/SSH CLI
-        
-        // Mocking behavior for development
-        $mockOnus = [
-            ['index' => '1/1/1:1', 'sn' => 'GPON00A1B2C3', 'ip' => '192.168.1.10', 'signal' => -18.5, 'temp' => 42.5, 'status' => 'online'],
-            ['index' => '1/1/1:2', 'sn' => 'GPON00D4E5F6', 'ip' => '192.168.1.11', 'signal' => -22.1, 'temp' => 45.0, 'status' => 'online'],
-            ['index' => '1/1/2:1', 'sn' => 'GPON007890AB', 'ip' => '192.168.1.12', 'signal' => -31.2, 'temp' => 40.2, 'status' => 'online'], // Redaman tinggi
-            ['index' => '1/1/2:2', 'sn' => 'GPON00CDEFGH', 'ip' => null, 'signal' => 0, 'temp' => 0, 'status' => 'offline'],
-        ];
+    protected $timeout;
+    protected $retries;
 
-        foreach ($mockOnus as $data) {
-            OnuNode::updateOrCreate(
-                ['olt_id' => $olt->id, 'onu_index' => $data['index']],
-                [
-                    'serial_number' => $data['sn'],
-                    'ip_address' => $data['ip'],
-                    'last_signal' => $data['signal'],
-                    'last_temp' => $data['temp'],
-                    'status' => $data['status'],
-                    'last_check' => now(),
-                    'client_count' => rand(1, 8)
-                ]
-            );
+    public function __construct()
+    {
+        if (!function_exists('snmp2_walk')) {
+            throw new RuntimeException('PHP SNMP extension tidak aktif.');
         }
 
-        return true;
+        $this->timeout = config('snmp.timeout', 3000000);
+        $this->retries = config('snmp.retries', 1);
     }
 
-    /**
-     * Reboot a specific ONU via OLT CLI
-     */
-    public function rebootOnu(OnuNode $node)
+    public function snmpWalk($ip, $community, $oid)
     {
-        $olt = $node->olt;
-        Log::info("Sending reboot command to OLT {$olt->name} for ONU {$node->onu_index}");
-        
-        // Mock command execution
-        // Example for ZTE: onu reboot slot <slot> pon <pon> onu <onu>
-        // Example for Global/VSOL: onu reboot <index>
-        
-        return true;
+        snmp_set_oid_output_format(SNMP_OID_OUTPUT_NUMERIC);
+        $result = @snmp2_real_walk($ip, $community, $oid, $this->timeout, $this->retries);
+        return $result !== false ? $result : [];
     }
 
-    /**
-     * Get real-time signal level (Rx Power) from OLT via SNMP
-     */
-    public function getSignal(OnuNode $node)
+    public function snmpGet($ip, $community, $oid)
     {
-        // Mock return
-        return rand(-180, -320) / 10;
+        $result = @snmp2_get($ip, $community, $oid, $this->timeout, $this->retries);
+        if ($result !== false) {
+            $parts = explode(':', $result, 2);
+            return isset($parts[1]) ? trim(str_replace('"', '', $parts[1])) : trim($result);
+        }
+        return null;
+    }
+
+    public function isReachable(OltConfig $olt)
+    {
+        $sysDescr = $this->snmpGet($olt->ip_address, $olt->snmp_community, '.1.3.6.1.2.1.1.1.0');
+        return !empty($sysDescr);
+    }
+
+    public function getSystemInfo(OltConfig $olt)
+    {
+        return [
+            'sysDescr' => $this->snmpGet($olt->ip_address, $olt->snmp_community, '.1.3.6.1.2.1.1.1.0'),
+            'sysUpTime' => $this->snmpGet($olt->ip_address, $olt->snmp_community, '.1.3.6.1.2.1.1.3.0'),
+            'sysName' => $this->snmpGet($olt->ip_address, $olt->snmp_community, '.1.3.6.1.2.1.1.5.0'),
+        ];
+    }
+
+    public function getAllOnu(OltConfig $olt)
+    {
+        $onus = [];
+        // V-SOL specific OIDs
+        $snOid = '.1.3.6.1.4.1.37582.89.53.1.1.1.1.2'; 
+        $statusOid = '.1.3.6.1.4.1.37582.89.53.1.1.1.1.5';
+        $signalOid = '.1.3.6.1.4.1.37582.89.53.1.1.1.1.8';
+
+        $snData = $this->snmpWalk($olt->ip_address, $olt->snmp_community, $snOid);
+        $statusData = $this->snmpWalk($olt->ip_address, $olt->snmp_community, $statusOid);
+        $signalData = $this->snmpWalk($olt->ip_address, $olt->snmp_community, $signalOid);
+
+        foreach ($snData as $oid => $val) {
+            $parts = explode('.', $oid);
+            $index = end($parts);
+            
+            $onus[$index] = [
+                'onu_index' => $index,
+                'serial_number' => $this->cleanSnmpValue($val),
+                'status' => 'offline',
+                'signal' => null
+            ];
+        }
+
+        foreach ($statusData as $oid => $val) {
+            $parts = explode('.', $oid);
+            $index = end($parts);
+            if (isset($onus[$index])) {
+                $onus[$index]['status'] = $this->parseOnuStatus($this->cleanSnmpValue($val));
+            }
+        }
+
+        foreach ($signalData as $oid => $val) {
+            $parts = explode('.', $oid);
+            $index = end($parts);
+            if (isset($onus[$index])) {
+                $onus[$index]['signal'] = $this->convertSignal($this->cleanSnmpValue($val));
+            }
+        }
+
+        return array_values($onus);
+    }
+
+    public function getOnuStatus(OltConfig $olt, $onuIndex)
+    {
+        $statusOid = '.1.3.6.1.4.1.37582.89.53.1.1.1.1.5.' . $onuIndex;
+        $val = $this->snmpGet($olt->ip_address, $olt->snmp_community, $statusOid);
+        return $val ? $this->parseOnuStatus($val) : 'offline';
+    }
+
+    public function convertSignal($value)
+    {
+        $value = (int)$value;
+        if ($value == 0 || $value == -2147483648 || $value == 65535) {
+            return null;
+        }
+        return round($value / 100, 2);
+    }
+
+    public function parseOnuStatus($value)
+    {
+        $value = (int)$value;
+        if ($value === 1) return 'online';
+        return 'offline';
+    }
+    
+    private function cleanSnmpValue($val)
+    {
+        $parts = explode(':', $val, 2);
+        return isset($parts[1]) ? trim(str_replace('"', '', $parts[1])) : trim($val);
     }
 }

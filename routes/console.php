@@ -23,3 +23,5 @@ Schedule::call(function () {
         ->where('stopped_at', '<', now()->subDays(10))
         ->delete();
 })->dailyAt('01:00');
+
+Schedule::command('olt:sync')->everyMinute();

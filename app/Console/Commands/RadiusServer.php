@@ -20,6 +20,15 @@ class RadiusServer extends Command
     private $clients = [];
     private $lastClientRefresh = 0;
 
+    // =============================================
+    // RADIUS Authentication Flow (nd-hotspot)
+    // =============================================
+    // 1. Terima Access-Request dari MikroTik (UDP)
+    // 2. Cek voucher di tabel `vouchers` (kolom: code, status)
+    // 3. VALID & status='available' → aktifkan & kirim Access-Accept + Mikrotik-Rate-Limit
+    // 4. VALID & status='used' & belum expired → kirim Access-Accept
+    // 5. TIDAK ADA / EXPIRED / status invalid → kirim Access-Reject langsung
+    // =============================================
     public function handle()
     {
         if (function_exists('pcntl_signal')) {
@@ -155,18 +164,6 @@ class RadiusServer extends Command
 
             if (!$voucher) {
                 DB::rollBack();
-                
-                // === RADIUS PROXY / CASCADE FEATURE ===
-                $proxyStatus = $this->forwardToUpstreamRadius(RadiusServerAdapter::TYPE_ACCESS_REQUEST, $id, $attrs, $from, $port, $secret, $authenticator);
-                
-                if ($proxyStatus === 'success') {
-                    $this->logEvent($username, $from, 'Proxy', 'Success', "Berhasil Proxy ke RADIUS Lain (" . env('UPSTREAM_RADIUS_IP') . ")");
-                    return;
-                } elseif ($proxyStatus === 'timeout') {
-                    $this->logEvent($username, $from, 'Proxy', 'Fail', "Proxy Gagal: RADIUS Lain (" . env('UPSTREAM_RADIUS_IP') . ") Timeout/Mati");
-                }
-                // ======================================
-
                 $this->sendReject($id, $from, $port, $secret, $authenticator, "Voucher not found");
                 $this->logEvent($username, $from, 'Login', 'Fail', "Voucher code not found: $username");
                 return;
@@ -325,19 +322,12 @@ class RadiusServer extends Command
         // Check if this session or user belongs to our DB
         $isLocalUser = Voucher::where('code', $username)->exists() || RadiusSession::where('session_id', $sessionId)->exists();
 
-        // If not a local user, forward to proxy
+        // Non-local user: just ACK and ignore (no proxy)
         if (!$isLocalUser) {
-            $proxyStatus = $this->forwardToUpstreamRadius(RadiusServerAdapter::TYPE_ACCOUNTING_REQUEST, $id, $attrs, $ip, $port, $secret, $requestAuthenticator);
-            if ($proxyStatus === 'success') {
-                // Jangan log setiap interim agar tidak spam, log start/stop saja
-                if ($statusType == 1 || $statusType == 2) {
-                    $this->logEvent($username, $ip, 'Proxy', 'Info', "Berhasil meneruskan data Accounting $typeStr ke RL Radius");
-                }
-                return; // Cukup lempar saja, jangan catat di lokal
-            } elseif ($proxyStatus === 'timeout') {
-                $this->logEvent($username, $ip, 'Proxy', 'Fail', "Gagal Accounting: RL Radius Timeout");
-                return;
-            }
+            $radius = new RadiusServerAdapter();
+            $packet = $radius->encodePacket(RadiusServerAdapter::TYPE_ACCOUNTING_RESPONSE, $id, $secret, $requestAuthenticator, []);
+            socket_sendto($this->currentSocket, $packet, strlen($packet), 0, $ip, $port);
+            return;
         }
 
         try {
@@ -468,81 +458,5 @@ class RadiusServer extends Command
         if (!$expiresAt) return 0;
         $diff = Carbon::now()->diffInSeconds($expiresAt, false);
         return $diff > 0 ? $diff : 0;
-    }
-
-    private function forwardToUpstreamRadius($code, $id, $attrs, $from, $port, $mikrotikSecret, $requestAuth)
-    {
-        $upstreamIp = env('UPSTREAM_RADIUS_IP');
-        $upstreamPort = ($code == RadiusServerAdapter::TYPE_ACCOUNTING_REQUEST) 
-            ? env('UPSTREAM_RADIUS_PORT', 1812) + 1 
-            : env('UPSTREAM_RADIUS_PORT', 1812);
-        
-        $upstreamSecret = env('UPSTREAM_RADIUS_SECRET');
-
-        if (!$upstreamIp || !$upstreamSecret) {
-            return 'disabled'; // Proxy disabled or missing secret
-        }
-
-        $radius = new RadiusServerAdapter();
-        
-        // 1. Prepare attributes for Upstream
-        $upstreamAttrs = $attrs;
-        unset($upstreamAttrs[80]); // Strip original Message-Authenticator as it uses Mikrotik's secret
-        
-        $upstreamRequestAuth = $requestAuth;
-        
-        if ($code == RadiusServerAdapter::TYPE_ACCESS_REQUEST) {
-            $upstreamRequestAuth = random_bytes(16);
-            if (isset($attrs[2])) {
-                // $attrs[2] is the plain text password decrypted earlier. We re-encrypt it for upstream.
-                $upstreamAttrs[2] = $radius->encryptPapPassword($attrs[2], $upstreamSecret, $upstreamRequestAuth);
-            }
-            if (isset($attrs[3]) && !isset($attrs[60])) {
-                // Proxying CHAP: If no explicit CHAP-Challenge, the original challenge was the original RequestAuthenticator.
-                // We must pass it to the upstream RADIUS so it can verify the CHAP hash!
-                $upstreamAttrs[60] = $requestAuth;
-            }
-        }
-
-        // 2. Encode packet for Upstream
-        $upstreamPacket = $radius->encodePacket($code, $id, $upstreamSecret, $upstreamRequestAuth, $upstreamAttrs);
-
-        // 3. Send to Upstream
-        $sock = socket_create(AF_INET, SOCK_DGRAM, SOL_UDP);
-        if (!$sock) return 'error';
-        socket_set_option($sock, SOL_SOCKET, SO_RCVTIMEO, ['sec' => 2, 'usec' => 0]);
-        socket_sendto($sock, $upstreamPacket, strlen($upstreamPacket), 0, $upstreamIp, $upstreamPort);
-        
-        $reply = '';
-        $replyFrom = '';
-        $replyPort = 0;
-        
-        // 4. Wait for Upstream Response
-        if (@socket_recvfrom($sock, $reply, 4096, 0, $replyFrom, $replyPort)) {
-            socket_close($sock);
-            
-            // 5. Decode Upstream's Response
-            $decodedReply = $radius->decodePacket($reply, $upstreamSecret);
-            if (!$decodedReply) return 'error';
-
-            // 6. Re-encode Response for MikroTik using original RequestAuth and MikroTik Secret
-            $attrsToMikrotik = $decodedReply['attributes'];
-            unset($attrsToMikrotik[80]); // Strip upstream's Message-Authenticator so we can generate a fresh one for MikroTik
-            
-            $mikrotikPacket = $radius->encodePacket(
-                $decodedReply['code'], 
-                $id, 
-                $mikrotikSecret, 
-                $requestAuth, 
-                $attrsToMikrotik
-            );
-
-            // 7. Send back to MikroTik
-            socket_sendto($this->currentSocket, $mikrotikPacket, strlen($mikrotikPacket), 0, $from, $port);
-            return 'success';
-        }
-        
-        socket_close($sock);
-        return 'timeout';
     }
 }

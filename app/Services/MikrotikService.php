@@ -6,6 +6,9 @@ use Illuminate\Support\Facades\Log;
 
 class MikrotikService
 {
+    const CONNECT_TIMEOUT = 5;
+    const READ_TIMEOUT = 8;
+
     protected $client;
     protected $config;
 
@@ -16,7 +19,7 @@ class MikrotikService
             'user'     => env('MIKROTIK_USERNAME', 'admin'),
             'pass'     => env('MIKROTIK_PASSWORD', 'karambia1686'),
             'port'     => (int) env('MIKROTIK_PORT', 8728),
-            'timeout'  => 15,
+            'timeout'  => self::CONNECT_TIMEOUT,
         ];
     }
 
@@ -32,6 +35,48 @@ class MikrotikService
             }
         }
         return true;
+    }
+
+    /**
+     * Quick connectivity check without executing commands.
+     * Uses raw socket with 3-second timeout.
+     */
+    public function isOnline(): bool
+    {
+        $start = microtime(true);
+        $socket = @fsockopen($this->config['host'], $this->config['port'], $errno, $errstr, 3);
+        if ($socket) {
+            $latency = round((microtime(true) - $start) * 1000);
+            fclose($socket);
+            return true;
+        }
+        Log::warning('MikroTik unreachable', ['ip' => $this->config['host'], 'error' => $errstr]);
+        return false;
+    }
+
+    /**
+     * Get router status with latency info.
+     */
+    public function getStatus(): array
+    {
+        $start = microtime(true);
+        $socket = @fsockopen($this->config['host'], $this->config['port'], $errno, $errstr, 3);
+        if ($socket) {
+            $latency = round((microtime(true) - $start) * 1000);
+            fclose($socket);
+            return [
+                'online' => true,
+                'latency_ms' => $latency,
+                'checked_at' => now()->toDateTimeString(),
+            ];
+        }
+        Log::warning('MikroTik unreachable', ['ip' => $this->config['host'], 'error' => $errstr]);
+        return [
+            'online' => false,
+            'latency_ms' => null,
+            'checked_at' => now()->toDateTimeString(),
+            'error' => 'Router tidak dapat dijangkau',
+        ];
     }
 
     public function disconnect()

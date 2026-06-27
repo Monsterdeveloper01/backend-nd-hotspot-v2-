@@ -57,11 +57,19 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/dashboard/transactions', [\App\Http\Controllers\Api\DashboardController::class, 'transactions']);
     Route::post('/dashboard/refresh-mikrotik', [\App\Http\Controllers\Api\DashboardController::class, 'refreshMikrotik']);
 
+    // Admin: MikroTik Status
+    Route::get('/mikrotik/status', function (App\Services\MikrotikService $mikrotik) {
+        return response()->json($mikrotik->getStatus());
+    });
+
     // Admin: Network Center (OLT/ONU)
-    Route::get('/network/olts', [\App\Http\Controllers\Api\NetworkCenterController::class, 'index']);
+    Route::get('/olt', [\App\Http\Controllers\Api\NetworkCenterController::class, 'getOlt']);
+    Route::get('/olt/{id}/onu', [\App\Http\Controllers\Api\NetworkCenterController::class, 'getOnu']);
+    Route::get('/olt/{id}/onu/live', [\App\Http\Controllers\Api\NetworkCenterController::class, 'getOnuLive']);
+    Route::post('/olt/{id}/sync', [\App\Http\Controllers\Api\NetworkCenterController::class, 'syncOlt']);
+    Route::get('/olt/{id}/status', [\App\Http\Controllers\Api\NetworkCenterController::class, 'getStatus']);
+    
     Route::post('/network/olts', [\App\Http\Controllers\Api\NetworkCenterController::class, 'storeOlt']);
-    Route::get('/network/olts/{id}/nodes', [\App\Http\Controllers\Api\NetworkCenterController::class, 'nodes']);
-    Route::post('/network/olts/{id}/sync', [\App\Http\Controllers\Api\NetworkCenterController::class, 'sync']);
     Route::put('/network/nodes/{id}', [\App\Http\Controllers\Api\NetworkCenterController::class, 'updateNode']);
     Route::post('/network/nodes/{id}/reboot', [\App\Http\Controllers\Api\NetworkCenterController::class, 'reboot']);
 
