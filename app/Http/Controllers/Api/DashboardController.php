@@ -34,6 +34,30 @@ class DashboardController extends Controller
             ->where('created_at', '>=', $startOfMonth)
             ->sum('amount');
 
+        $voucherRevenueMonth = DB::table('transactions')
+            ->where('status', 'success')
+            ->where('created_at', '>=', $startOfMonth)
+            ->where('external_id', 'like', 'ND-%')
+            ->sum('amount');
+
+        $billRevenueMonth = DB::table('transactions')
+            ->where('status', 'success')
+            ->where('created_at', '>=', $startOfMonth)
+            ->where('external_id', 'like', 'BILL-%')
+            ->sum('amount');
+
+        $manualBillRevenueMonth = DB::table('transactions')
+            ->where('status', 'success')
+            ->where('created_at', '>=', $startOfMonth)
+            ->where('external_id', 'like', 'MANUAL-%')
+            ->sum('amount');
+
+        $qrisStatisRevenueMonth = DB::table('transactions')
+            ->where('status', 'success')
+            ->where('created_at', '>=', $startOfMonth)
+            ->where('payment_method', 'qris_statis')
+            ->sum('amount');
+
         $todayRevenue = DB::table('transactions')
             ->where('status', 'success')
             ->where('created_at', '>=', $today)
@@ -194,6 +218,10 @@ class DashboardController extends Controller
         return response()->json([
             'stats' => [
                 'monthly_revenue' => $monthlyRevenue,
+                'voucher_revenue_month' => $voucherRevenueMonth,
+                'bill_revenue_month' => $billRevenueMonth,
+                'manual_bill_revenue_month' => $manualBillRevenueMonth,
+                'qris_statis_revenue_month' => $qrisStatisRevenueMonth,
                 'today_revenue' => $todayRevenue,
                 'bill_revenue_today' => $billRevenueToday,
                 'voucher_revenue_today' => $voucherRevenueToday,
