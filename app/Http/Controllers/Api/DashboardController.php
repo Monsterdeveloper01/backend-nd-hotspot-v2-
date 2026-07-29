@@ -105,6 +105,27 @@ class DashboardController extends Controller
             ->groupBy('date')
             ->get();
 
+        // Bill Chart (Gabungan BILL dan MANUAL BILL)
+        $billChartData = DB::table('transactions')
+            ->select(DB::raw('DATE(created_at) as date'), DB::raw('SUM(amount) as total'))
+            ->where('status', 'success')
+            ->where('created_at', '>=', $last30Days)
+            ->where(function($query) {
+                $query->where('external_id', 'like', 'BILL-%')
+                      ->orWhere('external_id', 'like', 'MANUAL-%');
+            })
+            ->groupBy('date')
+            ->get();
+
+        // QRIS Statis Chart
+        $qrisStatisChartData = DB::table('transactions')
+            ->select(DB::raw('DATE(created_at) as date'), DB::raw('SUM(amount) as total'))
+            ->where('status', 'success')
+            ->where('created_at', '>=', $last30Days)
+            ->where('payment_method', 'qris_statis')
+            ->groupBy('date')
+            ->get();
+
         // 3. Online Users (Direct from Mikrotik for non-RADIUS)
         $mikrotikActive = [];
         try {
@@ -187,6 +208,8 @@ class DashboardController extends Controller
             ],
             'chart' => $chartData,
             'voucher_chart' => $voucherChartData,
+            'bill_chart' => $billChartData,
+            'qris_statis_chart' => $qrisStatisChartData,
             'combined_users' => $combinedUsers,
             'recent_transactions' => $recentTransactions
         ]);

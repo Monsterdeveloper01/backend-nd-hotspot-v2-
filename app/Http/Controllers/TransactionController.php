@@ -186,6 +186,19 @@ class TransactionController extends Controller
             if (!$isSystemGenerated) {
                 \Log::info('STATIC QRIS PAYMENT RECEIVED', ['order_id' => $orderId, 'amount' => $grossAmount]);
                 
+                try {
+                    Transaction::create([
+                        'external_id' => $orderId,
+                        'amount' => $grossAmount,
+                        'status' => 'success',
+                        'payment_method' => 'qris_statis',
+                        'voucher_plan_id' => null,
+                        'customer_phone' => null,
+                    ]);
+                } catch (\Exception $e) {
+                    \Log::error('FAILED TO SAVE STATIC QRIS TO TRANSACTIONS', ['error' => $e->getMessage()]);
+                }
+                
                 $adminPhone = '628129588587'; 
                 $issuer = strtoupper($request->issuer ?? 'QRIS');
                 $amountFormatted = number_format($grossAmount, 0, ',', '.');
