@@ -160,82 +160,83 @@ class TransactionController extends Controller
     {
         \Log::info('MIDTRANS CALLBACK RECEIVED', $request->all());
 
-        $serverKey = env('MIDTRANS_SERVER_KEY');
-        
-        // Midtrans gross_amount sometimes comes with decimals (.00)
-        // We must match the EXACT string sent by Midtrans for the signature hash
-        $grossAmount = $request->gross_amount;
-        $orderId = $request->order_id;
-        $statusCode = $request->status_code;
-        
-        $hashed = hash("sha512", $orderId . $statusCode . $grossAmount . $serverKey);
-
-        if ($hashed !== $request->signature_key) {
-            \Log::error('MIDTRANS INVALID SIGNATURE', [
-                'expected' => $request->signature_key,
-                'calculated' => $hashed,
-                'payload' => $orderId . $statusCode . $grossAmount . $serverKey
-            ]);
-            return response()->json(['message' => 'Invalid signature'], 403);
-        }
-
-        if ($request->payment_type == 'qris' && in_array($request->transaction_status, ['settlement', 'capture'])) {
+        try {
+            $serverKey = env('MIDTRANS_SERVER_KEY');
             
-            $isSystemGenerated = Transaction::where('external_id', $orderId)->exists() || str_starts_with($orderId, 'BILL-');
+            // Midtrans gross_amount sometimes comes with decimals (.00)
+            // We must match the EXACT string sent by Midtrans for the signature hash
+            $grossAmount = $request->gross_amount;
+            $orderId = $request->order_id;
+            $statusCode = $request->status_code;
             
-            if (!$isSystemGenerated) {
-                \Log::info('STATIC QRIS PAYMENT RECEIVED', ['order_id' => $orderId, 'amount' => $grossAmount]);
-                
-                try {
-                    Transaction::create([
-                        'external_id' => $orderId,
-                        'amount' => $grossAmount,
-                        'status' => 'success',
-                        'payment_method' => 'qris_statis',
-                        'voucher_plan_id' => null,
-                        'customer_phone' => null,
-                    ]);
-                } catch (\Exception $e) {
-                    \Log::error('FAILED TO SAVE STATIC QRIS TO TRANSACTIONS', ['error' => $e->getMessage()]);
-                }
-                
-                $adminPhone = '628129588587'; 
-                $issuer = strtoupper($request->issuer ?? 'QRIS');
-                $amountFormatted = number_format($grossAmount, 0, ',', '.');
-                
-                // 1. Kirim WA ke Admin
-                $msgAdmin = "🔔 *PEMBAYARAN QRIS STATIS MASUK*\n\n" .
-                            "Dana sebesar *Rp {$amountFormatted}* berhasil diterima.\n" .
-                            "🏢 *Sumber:* {$issuer}\n" .
-                            "🆔 *Order ID:* {$orderId}";
-                try {
-                    $this->wa->sendMessage($adminPhone, $msgAdmin);
-                } catch (\Exception $e) {
-                    \Log::error('WA ADMIN STATIC QRIS FAILED', ['error' => $e->getMessage()]);
-                }
+            $hashed = hash("sha512", $orderId . $statusCode . $grossAmount . $serverKey);
 
-                // 2. Tembak Perintah ke Hardware ESP8266 via MQTT
-                try {
-                    // Gunakan floatval/intval karena Midtrans mengirimkan format "50000.00"
-                    $amountForHardware = (int) floatval($grossAmount);
-                    $mqttPayload = $this->generateAudioSequence($amountForHardware, $request->issuer ?? 'qris');
-                    
-                    // Membuat Client ID unik agar webhook yang masuk bersamaan tidak saling menendang koneksi
-                    $uniqueClientId = env('MQTT_CLIENT_ID', 'Laravel_Backend') . '_' . uniqid();
-                    
-                    $mqtt = new MqttClient(env('MQTT_HOST'), env('MQTT_PORT'), $uniqueClientId);
-                    $mqtt->connect();
-                    $mqtt->publish('qris/soundbox/midtrans', $mqttPayload, 0); 
-                    $mqtt->disconnect();
-                    
-                    \Log::info('SOUNDBOX HARDWARE TRIGGERED', ['payload' => $mqttPayload, 'amount' => $amountForHardware]);
-                } catch (\Exception $e) {
-                    \Log::error('MQTT PUBLISH FAILED', ['error' => $e->getMessage()]);
-                }
-
-                return response()->json(['message' => 'Static QRIS Handled and Hardware Triggered']);
+            if ($hashed !== $request->signature_key) {
+                \Log::error('MIDTRANS INVALID SIGNATURE', [
+                    'expected' => $request->signature_key,
+                    'calculated' => $hashed,
+                    'payload' => $orderId . $statusCode . $grossAmount . $serverKey
+                ]);
+                return response()->json(['message' => 'Invalid signature'], 403);
             }
-        }
+
+            if ($request->payment_type == 'qris' && in_array($request->transaction_status, ['settlement', 'capture'])) {
+                
+                $isSystemGenerated = Transaction::where('external_id', $orderId)->exists() || str_starts_with($orderId, 'BILL-');
+                
+                if (!$isSystemGenerated) {
+                    \Log::info('STATIC QRIS PAYMENT RECEIVED', ['order_id' => $orderId, 'amount' => $grossAmount]);
+                    
+                    try {
+                        Transaction::create([
+                            'external_id' => $orderId,
+                            'amount' => $grossAmount,
+                            'status' => 'success',
+                            'payment_method' => 'qris_statis',
+                            'voucher_plan_id' => null,
+                            'customer_phone' => null,
+                        ]);
+                    } catch (\Exception $e) {
+                        \Log::error('FAILED TO SAVE STATIC QRIS TO TRANSACTIONS', ['error' => $e->getMessage()]);
+                    }
+                    
+                    $adminPhone = '628129588587'; 
+                    $issuer = strtoupper($request->issuer ?? 'QRIS');
+                    $amountFormatted = number_format($grossAmount, 0, ',', '.');
+                    
+                    // 1. Kirim WA ke Admin
+                    $msgAdmin = "🔔 *PEMBAYARAN QRIS STATIS MASUK*\n\n" .
+                                "Dana sebesar *Rp {$amountFormatted}* berhasil diterima.\n" .
+                                "🏢 *Sumber:* {$issuer}\n" .
+                                "🆔 *Order ID:* {$orderId}";
+                    try {
+                        $this->wa->sendMessage($adminPhone, $msgAdmin);
+                    } catch (\Exception $e) {
+                        \Log::error('WA ADMIN STATIC QRIS FAILED', ['error' => $e->getMessage()]);
+                    }
+
+                    // 2. Tembak Perintah ke Hardware ESP8266 via MQTT
+                    try {
+                        // Gunakan floatval/intval karena Midtrans mengirimkan format "50000.00"
+                        $amountForHardware = (int) floatval($grossAmount);
+                        $mqttPayload = $this->generateAudioSequence($amountForHardware, $request->issuer ?? 'qris');
+                        
+                        // Membuat Client ID unik agar webhook yang masuk bersamaan tidak saling menendang koneksi
+                        $uniqueClientId = env('MQTT_CLIENT_ID', 'Laravel_Backend') . '_' . uniqid();
+                        
+                        $mqtt = new MqttClient(env('MQTT_HOST'), env('MQTT_PORT'), $uniqueClientId);
+                        $mqtt->connect();
+                        $mqtt->publish('qris/soundbox/midtrans', $mqttPayload, 0); 
+                        $mqtt->disconnect();
+                        
+                        \Log::info('SOUNDBOX HARDWARE TRIGGERED', ['payload' => $mqttPayload, 'amount' => $amountForHardware]);
+                    } catch (\Exception $e) {
+                        \Log::error('MQTT PUBLISH FAILED', ['error' => $e->getMessage()]);
+                    }
+
+                    return response()->json(['message' => 'Static QRIS Handled and Hardware Triggered']);
+                }
+            }
 
         // Handle Customer Billing Payment
         if (str_starts_with($orderId, 'BILL-')) {
@@ -407,6 +408,15 @@ class TransactionController extends Controller
         }
 
         return response()->json(['message' => 'OK']);
+
+        } catch (\Exception $e) {
+            \Log::error('MIDTRANS CALLBACK UNHANDLED ERROR', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+                'payload' => $request->all()
+            ]);
+            return response()->json(['message' => 'Callback processed with error: ' . $e->getMessage()], 200);
+        }
     }
 
     public function status($id)
