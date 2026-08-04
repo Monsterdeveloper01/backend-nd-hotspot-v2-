@@ -23,55 +23,67 @@ class VoucherController extends Controller
         $code = strtoupper(trim($request->query('code')));
         if (!$code) return response()->json(['message' => 'Kode voucher harus diisi'], 400);
 
-        // 1. Cari di Database Lokal
-        $voucher = Voucher::with('plan')->where('code', $code)->first();
-        
-        // 2. Cari data langsung ke MikroTik
-        $mikrotikData = $this->mikrotik->getHotspotUserDetailed($code);
+        try {
+            // Hanya cari di Database Lokal
+            $voucher = Voucher::with('plan')->where('code', $code)->first();
 
-        if (!$voucher && !$mikrotikData) {
-            return response()->json(['message' => 'Voucher tidak ditemukan di sistem maupun router'], 404);
-        }
+            if (!$voucher) {
+                return response()->json(['message' => 'Voucher tidak ditemukan. Pastikan kode yang Anda masukkan sudah benar.'], 404);
+            }
 
-        // --- Kasus A: Voucher terdaftar di Database Lokal ---
-        if ($voucher) {
-            // Hitung sisa waktu jika sudah terpakai
+            // Auto-update status expired jika sudah lewat waktu
+            if ($voucher->status === 'used' && $voucher->expires_at && now()->gt($voucher->expires_at)) {
+                $voucher->update(['status' => 'expired']);
+                $voucher->refresh();
+            }
+
+            // Hitung sisa waktu & persentase
             $timeLeft = null;
-            if ($voucher->expires_at) {
-                $diff = now()->diff($voucher->expires_at);
+            $timePercentage = null;
+
+            if ($voucher->status === 'used' && $voucher->used_at && $voucher->expires_at) {
                 if (now()->gt($voucher->expires_at)) {
-                    $timeLeft = "Expired";
+                    $timeLeft = 'Expired';
+                    $timePercentage = 100;
                 } else {
-                    $timeLeft = $diff->format('%d hari, %h jam, %i menit');
+                    $diff = now()->diff($voucher->expires_at);
+                    $parts = [];
+                    if ($diff->d > 0) $parts[] = $diff->d . ' hari';
+                    if ($diff->h > 0) $parts[] = $diff->h . ' jam';
+                    $parts[] = $diff->i . ' menit';
+                    $timeLeft = implode(', ', $parts);
+
+                    // Hitung persentase waktu terpakai
+                    $totalSeconds = $voucher->used_at->diffInSeconds($voucher->expires_at);
+                    $usedSeconds = $voucher->used_at->diffInSeconds(now());
+                    $timePercentage = $totalSeconds > 0 ? round(($usedSeconds / $totalSeconds) * 100, 1) : 0;
                 }
             }
 
-            return response()->json([
-                'source' => 'database',
-                'code' => $voucher->code,
-                'plan_name' => $voucher->plan->name ?? 'N/A',
-                'price' => $voucher->price,
-                'status' => $voucher->status,
-                'used_at' => $voucher->used_at ? $voucher->used_at->format('d M Y H:i') : 'Belum digunakan',
-                'expires_at' => $voucher->expires_at ? $voucher->expires_at->format('d M Y H:i') : '-',
-                'time_left' => $timeLeft,
-                'is_online' => $mikrotikData['is_online'] ?? false,
-                'mikrotik_uptime' => $mikrotikData['uptime'] ?? null,
-                'mikrotik_limit' => $mikrotikData['limit_uptime'] ?? null,
-            ]);
-        }
+            $plan = $voucher->plan;
 
-        // --- Kasus B: Voucher HANYA ada di MikroTik (Manual/Legacy) ---
-        return response()->json([
-            'source' => 'mikrotik',
-            'code' => $mikrotikData['name'],
-            'plan_name' => 'MikroTik Local User (' . $mikrotikData['profile'] . ')',
-            'status' => 'active_on_router',
-            'uptime' => $mikrotikData['uptime'],
-            'limit_uptime' => $mikrotikData['limit_uptime'],
-            'is_online' => $mikrotikData['is_online'],
-            'message' => 'Voucher terdeteksi langsung di Router.'
-        ]);
+            return response()->json([
+                'code' => $voucher->code,
+                'status' => $voucher->status,
+                'price' => $voucher->price,
+                'plan_name' => $plan->name ?? 'N/A',
+                'duration' => $plan->duration ?? null,
+                'speed_limit' => $plan->speed_limit ?? null,
+                'upload_limit' => $plan->upload_limit ?? null,
+                'download_limit' => $plan->download_limit ?? null,
+                'shared_users' => $plan->shared_users ?? null,
+                'is_gaming' => $plan->is_gaming ?? false,
+                'used_at' => $voucher->used_at ? $voucher->used_at->format('d M Y, H:i') : null,
+                'expires_at' => $voucher->expires_at ? $voucher->expires_at->format('d M Y, H:i') : null,
+                'time_left' => $timeLeft,
+                'time_percentage' => $timePercentage,
+                'mac_address' => $voucher->mac_address,
+                'created_at' => $voucher->created_at ? $voucher->created_at->format('d M Y, H:i') : null,
+            ]);
+        } catch (\Exception $e) {
+            \Log::error("Check voucher error: " . $e->getMessage());
+            return response()->json(['message' => 'Terjadi kesalahan saat memeriksa voucher. Silakan coba lagi.'], 500);
+        }
     }
 
     public function index(Request $request)

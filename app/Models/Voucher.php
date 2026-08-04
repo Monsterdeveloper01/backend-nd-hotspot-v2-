@@ -18,6 +18,12 @@ class Voucher extends Model
         'mac_address'
     ];
 
+    protected $casts = [
+        'used_at' => 'datetime',
+        'expires_at' => 'datetime',
+        'price' => 'decimal:2',
+    ];
+
     public function plan()
     {
         return $this->belongsTo(VoucherPlan::class, 'voucher_plan_id');
