@@ -6,6 +6,7 @@ use App\Http\Controllers\VoucherController;
 use App\Http\Controllers\TransactionController;
 use App\Http\Controllers\Api\CustomerController;
 use App\Http\Controllers\Api\RadiusClientController;
+use App\Http\Controllers\Api\WhatsAppBotController;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/', function() { return view('welcome'); });
@@ -80,6 +81,10 @@ Route::middleware('auth:sanctum')->group(function () {
 
     // Admin: System Config
     Route::post('/maintenance/toggle', [\App\Http\Controllers\Api\SystemConfigController::class, 'toggleMaintenance']);
+
+    // Admin: WhatsApp Bot Complaints
+    Route::get('/admin/complaints', [WhatsAppBotController::class, 'getComplaints']);
+    Route::patch('/admin/complaints/{id}/read', [WhatsAppBotController::class, 'markAsRead']);
 });
 
 // Public: System Config & Tracking
@@ -91,6 +96,10 @@ Route::post('/log-visit', [\App\Http\Controllers\Api\AnalyticsController::class,
 Route::get('/search-bill', [\App\Http\Controllers\Api\CustomerController::class, 'searchBill']);
 Route::get('/check-voucher', [VoucherController::class, 'checkVoucher']);
 Route::get('/customers/{id}/snap-token', [\App\Http\Controllers\Api\CustomerController::class, 'getSnapToken']);
+
+// WhatsApp Bot API (called by WA Gateway - no auth needed)
+Route::get('/wa/check-status', [WhatsAppBotController::class, 'checkStatus']);
+Route::post('/wa/complaint', [WhatsAppBotController::class, 'storeComplaint']);
 
 Route::get('/test', function () {
     return response()->json([

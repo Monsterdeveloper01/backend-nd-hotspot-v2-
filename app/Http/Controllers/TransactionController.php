@@ -9,6 +9,7 @@ use App\Models\Customer;
 use App\Services\WhatsAppService;
 use App\Services\MikrotikService;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
 use Carbon\Carbon;
 use Midtrans\Config;
@@ -398,6 +399,21 @@ class TransactionController extends Controller
                     \Log::info('VOUCHER WA SENT');
                 } catch (\Exception $e) {
                     \Log::error('VOUCHER WA FAILED', ['error' => $e->getMessage()]);
+                }
+
+                // Notify WA Gateway Bot (end session if user bought via bot)
+                try {
+                    $waGatewayUrl = env('WHATSAPP_GATEWAY_URL', 'http://localhost:5000');
+                    Http::post("{$waGatewayUrl}/wa-notify", [
+                        'phone' => $transaction->customer_phone,
+                        'voucher_code' => $voucher->code,
+                        'plan_name' => $transaction->plan->name,
+                        'amount' => (int)$transaction->amount,
+                        'external_id' => $orderId,
+                    ]);
+                    \Log::info('WA BOT NOTIFY SENT', ['order_id' => $orderId]);
+                } catch (\Exception $e) {
+                    \Log::warning('WA BOT NOTIFY FAILED (non-critical)', ['error' => $e->getMessage()]);
                 }
                 
                 $transaction->save();
