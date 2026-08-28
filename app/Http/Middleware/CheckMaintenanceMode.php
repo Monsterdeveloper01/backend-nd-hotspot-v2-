@@ -27,6 +27,7 @@ class CheckMaintenanceMode
                 'api/maintenance/*', 
                 'api/log-visit', 
                 'api/midtrans-callback', // Allow Midtrans to bypass maintenance
+                'api/wa/*', // Allow WhatsApp Bot to bypass maintenance
             ];
 
             foreach ($allowedPaths as $path) {
