@@ -382,16 +382,18 @@ class TransactionController extends Controller
                 
                 // Send WA
                 try {
-                    $msg = "🎫 *VOUCHER INTERNET – ND-Hotspot*\n" .
-                           env('APP_URL') . "\n\n" .
+                    $appUrl = env('APP_URL', 'https://nd-hotpot.net');
+                    $msg = "✅ *PEMBELIAN VOUCHER BERHASIL*\n" .
+                           "🌐 {$appUrl}\n\n" .
                            "Halo Pelanggan,\n" .
-                           "Paket: *{$transaction->plan->name}*\n" .
-                           "Harga: Rp " . number_format($transaction->amount, 0, ',', '.') . "\n" .
-                           "Kode: *{$voucher->code}*\n\n" .
+                           "Terima kasih telah melakukan pembelian voucher hotspot.\n\n" .
+                           "📦 *Paket:* {$transaction->plan->name}\n" .
+                           "💰 *Harga:* Rp " . number_format($transaction->amount, 0, ',', '.') . "\n" .
+                           "🎫 *Kode Voucher:* *{$voucher->code}*\n\n" .
                            "Cara Login:\n" .
                            "* Pastikan sinyal Wifi *ND-Hotspot* tercover\n" .
-                           "* Pilih sinyal Wifi *ND-Hotspot*\n" .
-                           "* Masukkan kode Voucher\n\n" .
+                           "* Hubungkan perangkat ke Wifi *ND-Hotspot*\n" .
+                           "* Masukkan kode Voucher pada halaman login\n\n" .
                            "Hormat kami,\n" .
                            "*ND-Hotspot* 💡";
                     
