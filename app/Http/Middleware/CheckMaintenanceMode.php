@@ -21,15 +21,13 @@ class CheckMaintenanceMode
         $isMaintenance = $maintenance && $maintenance->value === '1';
 
         if ($isMaintenance) {
-            // 2. Allow specific routes (Admin login, toggle, etc)
+            // 2. Allow specific routes (Admin login, toggle, webhooks, WhatsApp Bot)
             $allowedPaths = [
                 'api/login',
                 'api/maintenance/*', 
                 'api/log-visit', 
                 'api/midtrans-callback', // Allow Midtrans to bypass maintenance
                 'api/wa/*', // Allow WhatsApp Bot to bypass maintenance
-                'api/voucher-plans', // Allow bot to fetch plans
-                'api/checkout', // Allow bot to checkout
             ];
 
             foreach ($allowedPaths as $path) {
@@ -45,8 +43,14 @@ class CheckMaintenanceMode
                 return $next($request);
             }
 
-            // 4. If admin is logged in (has valid token), also allow
-            // This is optional but helpful
+            // 4. If admin is logged in (has valid bearer token), also allow
+            if ($request->bearerToken()) {
+                $token = \Laravel\Sanctum\PersonalAccessToken::findToken($request->bearerToken());
+                if ($token && (!$token->expires_at || $token->expires_at->isFuture())) {
+                    return $next($request);
+                }
+            }
+
             if ($request->user('sanctum')) {
                 return $next($request);
             }
