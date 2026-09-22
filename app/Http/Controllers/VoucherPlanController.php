@@ -17,7 +17,11 @@ class VoucherPlanController extends Controller
 
     public function index(Request $request)
     {
-        $query = VoucherPlan::query();
+        $query = VoucherPlan::withCount([
+            'vouchers as stock' => function($q) {
+                $q->where('status', 'available');
+            }
+        ]);
         
         if ($request->has('is_gaming')) {
             $query->where('is_gaming', $request->is_gaming == 'true' || $request->is_gaming == 1);

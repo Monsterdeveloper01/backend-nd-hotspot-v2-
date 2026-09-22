@@ -21,4 +21,9 @@ class VoucherPlan extends Model
     protected $casts = [
         'is_gaming' => 'boolean',
     ];
+
+    public function vouchers()
+    {
+        return $this->hasMany(Voucher::class);
+    }
 }
