@@ -106,6 +106,9 @@ Route::get('/search-bill', [\App\Http\Controllers\Api\CustomerController::class,
 Route::get('/check-voucher', [VoucherController::class, 'checkVoucher']);
 Route::get('/customers/{id}/snap-token', [\App\Http\Controllers\Api\CustomerController::class, 'getSnapToken']);
 
+// Public Loyalty Progress Check (Hidden direct lookup with anti-bruteforce)
+Route::match(['get', 'post'], '/loyalty/progress', [\App\Http\Controllers\Api\PublicLoyaltyController::class, 'check']);
+
 // WhatsApp Bot API (called by WA Gateway - no auth needed)
 Route::get('/wa/check-status', [WhatsAppBotController::class, 'checkStatus']);
 Route::post('/wa/complaint', [WhatsAppBotController::class, 'storeComplaint']);
