@@ -381,28 +381,8 @@ class TransactionController extends Controller
 
                 $transaction->voucher_id = $voucher->id;
                 
-                // Send WA
-                try {
-                    $appUrl = env('APP_URL', 'https://nd-hotpot.net');
-                    $msg = "✅ *PEMBELIAN VOUCHER BERHASIL*\n" .
-                           "🌐 {$appUrl}\n\n" .
-                           "Halo Pelanggan,\n" .
-                           "Terima kasih telah melakukan pembelian voucher hotspot.\n\n" .
-                           "📦 *Paket:* {$transaction->plan->name}\n" .
-                           "💰 *Harga:* Rp " . number_format($transaction->amount, 0, ',', '.') . "\n" .
-                           "🎫 *Kode Voucher:* *{$voucher->code}*\n\n" .
-                           "Cara Login:\n" .
-                           "* Pastikan sinyal Wifi *ND-Hotspot* tercover\n" .
-                           "* Hubungkan perangkat ke Wifi *ND-Hotspot*\n" .
-                           "* Masukkan kode Voucher pada halaman login\n\n" .
-                           "Hormat kami,\n" .
-                           "*ND-Hotspot* 💡";
-                    
-                    $this->wa->sendMessage($transaction->customer_phone, $msg);
-                    \Log::info('VOUCHER WA SENT');
-                } catch (\Exception $e) {
-                    \Log::error('VOUCHER WA FAILED', ['error' => $e->getMessage()]);
-                }
+                // WA message is NOT sent here — it is sent by the /wa-notify endpoint
+                // in the WhatsApp Gateway (server.js) to avoid duplicate messages.
 
                 // Notify WA Gateway Bot (end session if user bought via bot)
                 try {
