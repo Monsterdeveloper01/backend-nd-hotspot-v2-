@@ -42,8 +42,8 @@ class EventAnalyticsService
     public static function processTransaction(Transaction $transaction): void
     {
         try {
-            // Only process voucher transactions (ND-%)
-            if (!str_starts_with($transaction->external_id, 'ND-')) {
+            // Only process voucher buyer transactions (ND-% with a voucher_plan_id)
+            if (!str_starts_with($transaction->external_id ?? '', 'ND-') || empty($transaction->voucher_plan_id)) {
                 return;
             }
 
@@ -77,7 +77,7 @@ class EventAnalyticsService
                 self::recalculateParticipant($event, $phone, $periodKey);
             }
 
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             // NEVER let analytics errors affect the payment flow
             Log::error('EventAnalytics: processTransaction failed', [
                 'external_id' => $transaction->external_id ?? 'unknown',
@@ -113,7 +113,9 @@ class EventAnalyticsService
             // Since phones are stored in various formats, we query broadly and filter
             $possiblePrefixes = self::getPhonePrefixes($phone);
 
+            // Strictly filter for voucher purchases only (voucher_plan_id IS NOT NULL)
             $query = Transaction::where('external_id', 'like', 'ND-%')
+                ->whereNotNull('voucher_plan_id')
                 ->where('status', 'success')
                 ->where('created_at', '>=', $rangeStart)
                 ->where('created_at', '<', $rangeEnd);
@@ -165,7 +167,7 @@ class EventAnalyticsService
                 ]
             );
 
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             Log::error('EventAnalytics: recalculateParticipant failed', [
                 'event_id' => $event->id,
                 'phone' => $phone,

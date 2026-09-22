@@ -388,8 +388,11 @@ class EventController extends Controller
                 ->where('period_key', '>=', $startPeriodKey)
                 ->delete();
 
-            // Read source transactions (voucher only, success only)
+            // Read source transactions (voucher buyers only: ND-%, voucher_plan_id NOT NULL, customer_phone NOT NULL, success only)
             $transactions = Transaction::where('external_id', 'like', 'ND-%')
+                ->whereNotNull('voucher_plan_id')
+                ->whereNotNull('customer_phone')
+                ->where('customer_phone', '!=', '')
                 ->where('status', 'success')
                 ->where('created_at', '>=', $startDate)
                 ->select('customer_phone', 'amount', 'created_at')

@@ -33,8 +33,19 @@ class Transaction extends Model
     protected static function booted()
     {
         static::saved(function ($transaction) {
-            if (($transaction->status === 'success') && str_starts_with($transaction->external_id ?? '', 'ND-') && !empty($transaction->customer_phone)) {
-                \App\Services\EventAnalyticsService::processTransaction($transaction);
+            try {
+                // Khusus transaksi pembeli voucher (ND-% dan memiliki voucher_plan_id)
+                if (
+                    ($transaction->status === 'success') &&
+                    str_starts_with($transaction->external_id ?? '', 'ND-') &&
+                    !empty($transaction->voucher_plan_id) &&
+                    !empty($transaction->customer_phone)
+                ) {
+                    \App\Services\EventAnalyticsService::processTransaction($transaction);
+                }
+            } catch (\Throwable $e) {
+                // Non-blocking: analytics should NEVER interrupt transaction flow
+                \Log::warning('EventAnalytics boot hook: ' . $e->getMessage());
             }
         });
     }
