@@ -281,13 +281,12 @@ class EventController extends Controller
 
         $paginatedParticipants = $participantsTableQuery->paginate(20);
 
-        // Mask phone numbers in response
+        // Provide real unmasked phone numbers in response
         $paginatedParticipants->getCollection()->transform(function ($p) {
-            $p->masked_phone = PhoneNumberService::mask($p->phone);
             $p->avg_per_transaction = $p->transaction_count > 0
                 ? round($p->total_purchase / $p->transaction_count, 2)
                 : 0;
-            unset($p->phone);
+            $p->masked_phone = $p->phone;
             return $p;
         });
 
