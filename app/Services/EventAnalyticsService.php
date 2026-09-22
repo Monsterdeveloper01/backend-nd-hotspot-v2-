@@ -65,15 +65,11 @@ class EventAnalyticsService
             $txDate = Carbon::parse($transaction->created_at);
             $periodKey = $txDate->format('Y-m');
 
-            // Find all active events whose period covers this transaction date
-            // Use >= start_date and < end_date + 1 day (consistent with sync logic)
-            $events = Event::where('status', 'active')
-                ->where('start_date', '<=', $txDate->toDateString())
-                ->where('end_date', '>=', $txDate->toDateString())
-                ->get();
+            // Find all active events (permanent, ongoing tracking)
+            $events = Event::where('status', 'active')->get();
 
             if ($events->isEmpty()) {
-                // No active event covers this date — silently do nothing
+                // No active event — silently do nothing
                 return;
             }
 
@@ -94,7 +90,7 @@ class EventAnalyticsService
      * Recalculate a single participant's monthly aggregation from source transactions.
      * 
      * This is IDEMPOTENT: it queries all source transactions for the given
-     * phone + period_key within the event range, and replaces (UPSERT) the
+     * phone + period_key within the calendar month, and replaces (UPSERT) the
      * participant record with fresh totals.
      * 
      * If the same callback fires twice for ND-ABC123, the recalculation
@@ -108,16 +104,9 @@ class EventAnalyticsService
     private static function recalculateParticipant(Event $event, string $phone, string $periodKey): void
     {
         try {
-            // Determine the date range for this specific period_key within the event
-            $periodStart = Carbon::createFromFormat('Y-m', $periodKey)->startOfMonth();
-            $periodEnd = $periodStart->copy()->endOfMonth()->addDay()->startOfDay();
-
-            // Clamp to event boundaries
-            $eventStart = Carbon::parse($event->start_date)->startOfDay();
-            $eventEnd = Carbon::parse($event->end_date)->addDay()->startOfDay();
-
-            $rangeStart = $periodStart->max($eventStart);
-            $rangeEnd = $periodEnd->min($eventEnd);
+            // Date range for this specific period_key (calendar month)
+            $rangeStart = Carbon::createFromFormat('Y-m', $periodKey)->startOfMonth();
+            $rangeEnd = $rangeStart->copy()->endOfMonth()->addDay()->startOfDay();
 
             // Find ALL matching phone variants in source transactions
             // We need to match transactions where normalize(customer_phone) === $phone

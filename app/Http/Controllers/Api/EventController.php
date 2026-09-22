@@ -16,9 +16,9 @@ use Illuminate\Support\Facades\Validator;
 /**
  * EventController
  * 
- * Phase 1: Event System Analytics
- * Internal admin-only controller for managing analytics events,
- * syncing transaction data, and viewing purchase pattern analytics.
+ * Phase 1: Event System Analytics (Permanent / Never Expires)
+ * Internal admin-only controller for managing permanent events,
+ * syncing monthly transaction data, and viewing purchase pattern analytics.
  * 
  * NO reward logic. NO customer-facing features.
  */
@@ -43,15 +43,13 @@ class EventController extends Controller
                     'id' => $event->id,
                     'name' => $event->name,
                     'description' => $event->description,
-                    'start_date' => $event->start_date->format('Y-m-d'),
-                    'end_date' => $event->end_date->format('Y-m-d'),
                     'target_amount' => $event->target_amount,
                     'status' => $event->status,
                     'last_synced_at' => $event->last_synced_at?->toIso8601String(),
                     'sync_stats' => $event->sync_stats,
                     'participants_count' => $event->participants_count,
                     'unique_customers' => $uniqueCustomers,
-                    'created_at' => $event->created_at->toIso8601String(),
+                    'created_at' => $event->created_at?->toIso8601String(),
                 ];
             });
 
@@ -59,7 +57,7 @@ class EventController extends Controller
     }
 
     /**
-     * Create a new event.
+     * Create a new permanent event.
      * POST /admin/events
      */
     public function store(Request $request)
@@ -67,10 +65,8 @@ class EventController extends Controller
         $validator = Validator::make($request->all(), [
             'name' => 'required|string|max:255',
             'description' => 'nullable|string|max:2000',
-            'start_date' => 'required|date',
-            'end_date' => 'required|date|after_or_equal:start_date',
             'target_amount' => 'nullable|numeric|min:0',
-            'status' => 'nullable|in:draft,active,ended',
+            'status' => 'nullable|in:active,inactive',
         ]);
 
         if ($validator->fails()) {
@@ -80,17 +76,15 @@ class EventController extends Controller
         $event = Event::create([
             'name' => $request->name,
             'description' => $request->description,
-            'start_date' => $request->start_date,
-            'end_date' => $request->end_date,
             'target_amount' => $request->target_amount ?? 0,
-            'status' => $request->status ?? 'draft',
+            'status' => $request->status ?? 'active',
         ]);
 
         return response()->json($event, 201);
     }
 
     /**
-     * Update an existing event.
+     * Update an existing permanent event.
      * PUT /admin/events/{id}
      */
     public function update(Request $request, $id)
@@ -100,10 +94,8 @@ class EventController extends Controller
         $validator = Validator::make($request->all(), [
             'name' => 'sometimes|required|string|max:255',
             'description' => 'nullable|string|max:2000',
-            'start_date' => 'sometimes|required|date',
-            'end_date' => 'sometimes|required|date|after_or_equal:start_date',
             'target_amount' => 'nullable|numeric|min:0',
-            'status' => 'nullable|in:draft,active,ended',
+            'status' => 'nullable|in:active,inactive',
         ]);
 
         if ($validator->fails()) {
@@ -111,23 +103,23 @@ class EventController extends Controller
         }
 
         $event->update($request->only([
-            'name', 'description', 'start_date', 'end_date', 'target_amount', 'status'
+            'name', 'description', 'target_amount', 'status'
         ]));
 
         return response()->json($event);
     }
 
     /**
-     * Delete an event (draft only).
+     * Delete an event (inactive only).
      * DELETE /admin/events/{id}
      */
     public function destroy($id)
     {
         $event = Event::findOrFail($id);
 
-        if ($event->status !== 'draft') {
+        if ($event->status === 'active') {
             return response()->json([
-                'message' => 'Hanya event dengan status draft yang dapat dihapus.'
+                'message' => 'Nonaktifkan event terlebih dahulu sebelum menghapus.'
             ], 422);
         }
 
@@ -140,34 +132,42 @@ class EventController extends Controller
      * Sync transaction data into event_participants.
      * POST /admin/events/{id}/sync
      * 
-     * IDEMPOTENT: DELETE existing + rebuild from source transactions.
-     * Wrapped in DB::transaction for safety (rollback on error).
-     * 
-     * Source: transactions WHERE external_id LIKE 'ND-%' AND status = 'success'
-     *         AND created_at within event period.
+     * IDEMPOTENT: Rebuilds from source transactions.
+     * Default reads from event created_at date forward.
+     * Allows historical rebuild via 'start_date' or 'all_history' params.
+     * Only deletes participant periods being re-synced, preserving earlier history.
      */
-    public function sync($id)
+    public function sync(Request $request, $id)
     {
         $event = Event::findOrFail($id);
 
-        $startDate = Carbon::parse($event->start_date)->startOfDay();
-        // Use end_date + 1 day at midnight to include all transactions on end_date
-        $endDate = Carbon::parse($event->end_date)->addDay()->startOfDay();
+        // Determine start date for sync
+        if ($request->filled('start_date')) {
+            $startDate = Carbon::parse($request->start_date)->startOfDay();
+        } elseif ($request->boolean('all_history')) {
+            $startDate = Carbon::create(2020, 1, 1);
+        } else {
+            // Default: from event creation date (start of day)
+            $startDate = $event->created_at ? $event->created_at->copy()->startOfDay() : Carbon::now()->startOfMonth();
+        }
 
+        $startPeriodKey = $startDate->format('Y-m');
         $skippedCount = 0;
         $totalTransactions = 0;
         $insertedRows = 0;
 
         try {
-            DB::transaction(function () use ($event, $startDate, $endDate, &$skippedCount, &$totalTransactions, &$insertedRows) {
-                // Step 1: DELETE existing participants for this event
-                EventParticipant::where('event_id', $event->id)->delete();
+            DB::transaction(function () use ($event, $startDate, $startPeriodKey, &$skippedCount, &$totalTransactions, &$insertedRows) {
+                // Step 1: DELETE ONLY participants for periods being re-synced!
+                // Historical participants for earlier months are NOT touched.
+                EventParticipant::where('event_id', $event->id)
+                    ->where('period_key', '>=', $startPeriodKey)
+                    ->delete();
 
                 // Step 2: Read source transactions (voucher only, success only)
                 $transactions = Transaction::where('external_id', 'like', 'ND-%')
                     ->where('status', 'success')
                     ->where('created_at', '>=', $startDate)
-                    ->where('created_at', '<', $endDate)
                     ->select('customer_phone', 'amount', 'created_at')
                     ->get();
 
@@ -244,6 +244,7 @@ class EventController extends Controller
                 $event->update([
                     'last_synced_at' => $now,
                     'sync_stats' => [
+                        'start_date_synced' => $startDate->toDateString(),
                         'total_transactions' => $totalTransactions,
                         'skipped' => $skippedCount,
                         'unique_phones' => $uniquePhones,
@@ -257,6 +258,7 @@ class EventController extends Controller
                 'success' => true,
                 'message' => 'Sync berhasil.',
                 'stats' => [
+                    'start_date' => $startDate->toDateString(),
                     'total_transactions' => $totalTransactions,
                     'skipped' => $skippedCount,
                     'participant_rows' => $insertedRows,
@@ -286,6 +288,12 @@ class EventController extends Controller
     {
         $event = Event::findOrFail($id);
 
+        // Available periods sorted descending (latest month first)
+        $periods = EventParticipant::where('event_id', $event->id)
+            ->distinct('period_key')
+            ->orderBy('period_key', 'desc')
+            ->pluck('period_key');
+
         $participantsQuery = EventParticipant::where('event_id', $event->id);
 
         // Filter by period
@@ -296,15 +304,13 @@ class EventController extends Controller
         $allParticipants = $participantsQuery->get();
 
         // === SUMMARY METRICS ===
-
-        // Total unique customers (across all periods in this event)
         $totalUniqueCustomers = EventParticipant::where('event_id', $event->id)
             ->when($request->filled('period'), fn($q) => $q->where('period_key', $request->period))
             ->distinct('phone')
             ->count('phone');
 
         $totalTransactions = $allParticipants->sum('transaction_count');
-        $totalRevenue = $allParticipants->sum('total_purchase');
+        $totalRevenue = (float) $allParticipants->sum('total_purchase');
 
         // Average purchase per customer-month (each row = one customer-month)
         $avgPurchasePerCustomerMonth = $allParticipants->count() > 0
@@ -327,23 +333,26 @@ class EventController extends Controller
         // === DISTRIBUTION ===
         $distribution = $this->calculateDistribution($allParticipants);
 
-        // === AVAILABLE PERIODS ===
-        $periods = EventParticipant::where('event_id', $event->id)
-            ->distinct('period_key')
-            ->orderBy('period_key')
-            ->pluck('period_key');
+        // === TARGET STATS (using event's target_amount) ===
+        $targetAmount = (float) $event->target_amount;
+        $targetQualifying = 0;
+        $targetPercentage = 0;
+        if ($targetAmount > 0) {
+            $targetQualifying = $allParticipants->where('total_purchase', '>=', $targetAmount)->count();
+            $targetPercentage = $totalUniqueCustomers > 0
+                ? round(($targetQualifying / $totalUniqueCustomers) * 100, 1)
+                : 0;
+        }
 
         // === PARTICIPANTS TABLE (with masking & pagination) ===
         $participantsTableQuery = EventParticipant::where('event_id', $event->id)
             ->when($request->filled('period'), fn($q) => $q->where('period_key', $request->period))
             ->when($request->filled('search'), function ($q) use ($request) {
                 $search = trim($request->search);
-                // Normalize search input to match stored normalized phones
                 $normalizedSearch = PhoneNumberService::normalize($search);
                 if ($normalizedSearch) {
                     $q->where('phone', 'like', "%{$normalizedSearch}%");
                 } else {
-                    // Fallback: search raw digits
                     $digits = preg_replace('/[^0-9]/', '', $search);
                     if ($digits !== '') {
                         $q->where('phone', 'like', "%{$digits}%");
@@ -360,7 +369,6 @@ class EventController extends Controller
             $p->avg_per_transaction = $p->transaction_count > 0
                 ? round($p->total_purchase / $p->transaction_count, 2)
                 : 0;
-            // Do NOT expose raw phone in API response
             unset($p->phone);
             return $p;
         });
@@ -370,13 +378,13 @@ class EventController extends Controller
                 'id' => $event->id,
                 'name' => $event->name,
                 'description' => $event->description,
-                'start_date' => $event->start_date->format('Y-m-d'),
-                'end_date' => $event->end_date->format('Y-m-d'),
                 'target_amount' => $event->target_amount,
                 'status' => $event->status,
                 'last_synced_at' => $event->last_synced_at?->toIso8601String(),
                 'sync_stats' => $event->sync_stats,
+                'created_at' => $event->created_at?->toIso8601String(),
             ],
+            'selected_period' => $request->period ?? null,
             'summary' => [
                 'total_unique_customers' => $totalUniqueCustomers,
                 'total_transactions' => $totalTransactions,
@@ -384,6 +392,12 @@ class EventController extends Controller
                 'avg_purchase_per_customer_month' => $avgPurchasePerCustomerMonth,
                 'median_purchase_per_customer_month' => $medianPurchase,
                 'highest_monthly_purchase' => round($highestMonthlyPurchase, 2),
+            ],
+            'target_summary' => [
+                'target_amount' => $targetAmount,
+                'qualifying_customers' => $targetQualifying,
+                'total_customers' => $totalUniqueCustomers,
+                'percentage' => $targetPercentage,
             ],
             'distribution' => $distribution,
             'periods' => $periods,
@@ -393,10 +407,10 @@ class EventController extends Controller
 
     /**
      * Target simulation (read-only, no DB changes).
-     * GET /admin/events/{id}/simulate?target=50000
+     * GET /admin/events/{id}/simulate?target=50000&period=2026-09
      * 
-     * Counts how many customer-months qualify for a given target amount.
-     * Each customer-month is evaluated independently.
+     * Counts how many customers qualify for a given target amount per month.
+     * Evaluated per customer per month.
      */
     public function simulate(Request $request, $id)
     {
@@ -404,6 +418,7 @@ class EventController extends Controller
 
         $validator = Validator::make($request->all(), [
             'target' => 'required|numeric|min:0',
+            'period' => 'nullable|string',
         ]);
 
         if ($validator->fails()) {
@@ -412,13 +427,17 @@ class EventController extends Controller
 
         $target = (float) $request->target;
 
-        // Count customer-months that qualify
-        $qualifying = EventParticipant::where('event_id', $event->id)
+        $query = EventParticipant::where('event_id', $event->id);
+        if ($request->filled('period')) {
+            $query->where('period_key', $request->period);
+        }
+
+        $qualifying = (clone $query)
             ->where('total_purchase', '>=', $target)
             ->distinct('phone')
             ->count('phone');
 
-        $totalCustomers = EventParticipant::where('event_id', $event->id)
+        $totalCustomers = (clone $query)
             ->distinct('phone')
             ->count('phone');
 
@@ -428,6 +447,7 @@ class EventController extends Controller
 
         return response()->json([
             'target_amount' => $target,
+            'period' => $request->period ?? 'all',
             'qualifying_customers' => $qualifying,
             'total_customers' => $totalCustomers,
             'percentage' => $percentage,
@@ -458,7 +478,6 @@ class EventController extends Controller
             }
         }
 
-        // Return only range + count (remove internal min/max)
         return array_map(function ($b) {
             return ['range' => $b['range'], 'count' => $b['count']];
         }, $buckets);

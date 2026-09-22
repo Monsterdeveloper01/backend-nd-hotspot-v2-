@@ -16,8 +16,6 @@ class Event extends Model
     protected $fillable = [
         'name',
         'description',
-        'start_date',
-        'end_date',
         'target_amount',
         'status',
         'last_synced_at',
@@ -25,8 +23,6 @@ class Event extends Model
     ];
 
     protected $casts = [
-        'start_date' => 'date',
-        'end_date' => 'date',
         'target_amount' => 'decimal:2',
         'last_synced_at' => 'datetime',
         'sync_stats' => 'array',
