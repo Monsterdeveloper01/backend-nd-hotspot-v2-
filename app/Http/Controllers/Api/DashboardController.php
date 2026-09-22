@@ -212,7 +212,7 @@ class DashboardController extends Controller
         $recentTransactions = Transaction::with(['plan', 'voucher', 'customer'])
             ->where('status', 'success')
             ->orderBy('created_at', 'desc')
-            ->take(5)
+            ->take(30)
             ->get();
 
         return response()->json([
@@ -262,11 +262,39 @@ class DashboardController extends Controller
             ->orderBy('created_at', 'desc');
 
         if ($request->filter === 'bill') {
-            $query->where('external_id', 'like', 'BILL-%');
+            $query->where(function($q) {
+                $q->where('external_id', 'like', 'BILL-%')
+                  ->orWhere('external_id', 'like', 'MANUAL-%');
+            });
         } elseif ($request->filter === 'voucher') {
-            $query->where('external_id', 'like', 'ND-%');
+            $query->where(function($q) {
+                $q->where('external_id', 'like', 'ND-%')
+                  ->orWhereNotNull('voucher_plan_id')
+                  ->orWhereNotNull('voucher_id');
+            })->where('payment_method', '!=', 'qris_statis')
+              ->where('external_id', 'not like', 'QRIS-%');
+        } elseif ($request->filter === 'qris') {
+            $query->where(function($q) {
+                $q->where('payment_method', 'qris_statis')
+                  ->orWhere('external_id', 'like', 'QRIS-%');
+            });
         }
 
-        return $query->paginate(10);
+        if ($request->filled('search')) {
+            $search = trim($request->search);
+            $query->where(function($q) use ($search) {
+                $q->where('external_id', 'like', "%{$search}%")
+                  ->orWhere('customer_phone', 'like', "%{$search}%")
+                  ->orWhereHas('customer', function($cq) use ($search) {
+                      $cq->where('name', 'like', "%{$search}%")
+                         ->orWhere('whatsapp', 'like', "%{$search}%");
+                  })
+                  ->orWhereHas('voucher', function($vq) use ($search) {
+                      $vq->where('code', 'like', "%{$search}%");
+                  });
+            });
+        }
+
+        return $query->paginate(15);
     }
 }
