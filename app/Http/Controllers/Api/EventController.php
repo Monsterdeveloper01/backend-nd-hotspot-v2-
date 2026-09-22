@@ -281,12 +281,13 @@ class EventController extends Controller
 
         $paginatedParticipants = $participantsTableQuery->paginate(20);
 
-        // Provide real unmasked phone numbers in response
-        $paginatedParticipants->getCollection()->transform(function ($p) {
+        // Include target achievement status and unmasked phone in participant rows
+        $paginatedParticipants->getCollection()->transform(function ($p) use ($targetAmount) {
             $p->avg_per_transaction = $p->transaction_count > 0
                 ? round($p->total_purchase / $p->transaction_count, 2)
                 : 0;
-            $p->masked_phone = $p->phone;
+            $p->target_amount = $targetAmount;
+            $p->is_target_achieved = $targetAmount > 0 && (float) $p->total_purchase >= $targetAmount;
             return $p;
         });
 
@@ -310,7 +311,7 @@ class EventController extends Controller
                 'median_purchase_per_customer_month' => $medianPurchase,
                 'highest_monthly_purchase' => round($highestMonthlyPurchase, 2),
             ],
-            'target_summary' => [
+            'target_achievement' => [
                 'target_amount' => $targetAmount,
                 'qualifying_customers' => $targetQualifying,
                 'total_customers' => $totalUniqueCustomers,
@@ -320,55 +321,6 @@ class EventController extends Controller
             'periods' => $periods,
             'participants' => $paginatedParticipants,
             'server_time' => Carbon::now()->toIso8601String(),
-        ]);
-    }
-
-    /**
-     * Target qualification query (read-only calculation).
-     * GET /admin/events/{id}/simulate?target=50000&period=2026-09
-     * 
-     * Counts how many customers reach a target amount per month.
-     * Evaluated per customer per month.
-     */
-    public function simulate(Request $request, $id)
-    {
-        $event = Event::findOrFail($id);
-
-        $validator = Validator::make($request->all(), [
-            'target' => 'required|numeric|min:0',
-            'period' => 'nullable|string',
-        ]);
-
-        if ($validator->fails()) {
-            return response()->json(['errors' => $validator->errors()], 422);
-        }
-
-        $target = (float) $request->target;
-
-        $query = EventParticipant::where('event_id', $event->id);
-        if ($request->filled('period')) {
-            $query->where('period_key', $request->period);
-        }
-
-        $qualifying = (clone $query)
-            ->where('total_purchase', '>=', $target)
-            ->distinct('phone')
-            ->count('phone');
-
-        $totalCustomers = (clone $query)
-            ->distinct('phone')
-            ->count('phone');
-
-        $percentage = $totalCustomers > 0
-            ? round(($qualifying / $totalCustomers) * 100, 1)
-            : 0;
-
-        return response()->json([
-            'target_amount' => $target,
-            'period' => $request->period ?? 'all',
-            'qualifying_customers' => $qualifying,
-            'total_customers' => $totalCustomers,
-            'percentage' => $percentage,
         ]);
     }
 

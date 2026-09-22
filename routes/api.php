@@ -87,14 +87,13 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/admin/complaints', [WhatsAppBotController::class, 'getComplaints']);
     Route::patch('/admin/complaints/{id}/read', [WhatsAppBotController::class, 'markAsRead']);
 
-    // Admin: Event System Analytics (Phase 1 — Internal Only)
+    // Admin: Event & Loyalty Analytics (Phase 1 — Permanent Real-Time)
     Route::get('/admin/events', [EventController::class, 'index']);
     Route::post('/admin/events', [EventController::class, 'store']);
     Route::put('/admin/events/{id}', [EventController::class, 'update']);
     Route::delete('/admin/events/{id}', [EventController::class, 'destroy']);
     Route::post('/admin/events/{id}/sync', [EventController::class, 'sync']);
     Route::get('/admin/events/{id}/analytics', [EventController::class, 'analytics']);
-    Route::get('/admin/events/{id}/simulate', [EventController::class, 'simulate']);
 });
 
 // Public: System Config & Tracking

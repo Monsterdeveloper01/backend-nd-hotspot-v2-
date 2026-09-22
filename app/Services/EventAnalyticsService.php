@@ -75,6 +75,7 @@ class EventAnalyticsService
 
             foreach ($events as $event) {
                 self::recalculateParticipant($event, $phone, $periodKey);
+                self::broadcastUpdate($event, $phone, $periodKey, (float) $transaction->amount);
             }
 
         } catch (\Throwable $e) {
@@ -203,5 +204,27 @@ class EventAnalyticsService
             '+' . $normalizedPhone,   // +628123456789
             $core,                    // 8123456789
         ];
+    }
+
+    /**
+     * Broadcast real-time analytics update via WebSocket.
+     */
+    private static function broadcastUpdate(Event $event, string $phone, string $periodKey, float $amount): void
+    {
+        try {
+            $waGatewayUrl = env('WHATSAPP_GATEWAY_URL', 'http://localhost:5000');
+            \Illuminate\Support\Facades\Http::timeout(1)->asJson()->post("{$waGatewayUrl}/broadcast-analytics", [
+                'event_id' => $event->id,
+                'phone' => $phone,
+                'period_key' => $periodKey,
+                'amount' => $amount,
+                'timestamp' => Carbon::now()->toIso8601String(),
+            ]);
+        } catch (\Throwable $e) {
+            // Non-blocking: failure to broadcast should NEVER affect transaction
+            Log::warning('EventAnalytics: broadcastUpdate failed (non-critical)', [
+                'error' => $e->getMessage(),
+            ]);
+        }
     }
 }
