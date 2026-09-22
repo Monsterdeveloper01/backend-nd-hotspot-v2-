@@ -7,6 +7,7 @@ use App\Models\Voucher;
 use App\Models\VoucherPlan;
 use App\Models\Customer;
 use App\Services\WhatsAppService;
+use App\Services\EventAnalyticsService;
 use App\Services\MikrotikService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Http;
@@ -419,6 +420,11 @@ class TransactionController extends Controller
                 }
                 
                 $transaction->save();
+
+                // Phase 1: Event Analytics — automatic background tracking
+                // Customer does NOT know this is happening. No notifications.
+                // Idempotent: recalculates from source transactions, safe for duplicate callbacks.
+                EventAnalyticsService::processTransaction($transaction);
             }
         } elseif ($request->transaction_status == 'expire' || $request->transaction_status == 'cancel') {
             $transaction->status = 'expired';
