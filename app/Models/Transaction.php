@@ -25,4 +25,17 @@ class Transaction extends Model
     {
         return $this->belongsTo(Customer::class, 'customer_phone', 'whatsapp');
     }
+
+    /**
+     * The "booted" method of the model.
+     * Ensures 100% real-time tracking for successful voucher transactions.
+     */
+    protected static function booted()
+    {
+        static::saved(function ($transaction) {
+            if (($transaction->status === 'success') && str_starts_with($transaction->external_id ?? '', 'ND-') && !empty($transaction->customer_phone)) {
+                \App\Services\EventAnalyticsService::processTransaction($transaction);
+            }
+        });
+    }
 }

@@ -16,11 +16,11 @@ use Illuminate\Support\Facades\Validator;
 /**
  * EventController
  * 
- * Phase 1: Event System Analytics (Permanent / Never Expires)
+ * Phase 1: Real-Time Event & Loyalty System (Permanent / Never Expires)
  * Internal admin-only controller for managing permanent events,
- * syncing monthly transaction data, and viewing purchase pattern analytics.
+ * 100% real-time transaction tracking, and customer loyalty analytics.
  * 
- * NO reward logic. NO customer-facing features.
+ * Sisi customer: BELUM menerima hadiah / voucher gratis (Admin internal only).
  */
 class EventController extends Controller
 {
@@ -80,6 +80,15 @@ class EventController extends Controller
             'status' => $request->status ?? 'active',
         ]);
 
+        // If created as active, immediately populate data for current month in real time
+        if ($event->status === 'active') {
+            try {
+                $this->executeSync($event, Carbon::now()->startOfMonth());
+            } catch (\Exception $e) {
+                Log::warning('Auto-sync on event creation failed: ' . $e->getMessage());
+            }
+        }
+
         return response()->json($event, 201);
     }
 
@@ -102,9 +111,20 @@ class EventController extends Controller
             return response()->json(['errors' => $validator->errors()], 422);
         }
 
+        $wasInactive = $event->status === 'inactive';
+
         $event->update($request->only([
             'name', 'description', 'target_amount', 'status'
         ]));
+
+        // If transitioned from inactive to active, ensure current month data is synced
+        if ($wasInactive && $event->status === 'active') {
+            try {
+                $this->executeSync($event, Carbon::now()->startOfMonth());
+            } catch (\Exception $e) {
+                Log::warning('Auto-sync on event activation failed: ' . $e->getMessage());
+            }
+        }
 
         return response()->json($event);
     }
@@ -129,164 +149,62 @@ class EventController extends Controller
     }
 
     /**
-     * Sync transaction data into event_participants.
+     * Sync / Rebuild transaction data into event_participants.
      * POST /admin/events/{id}/sync
      * 
      * IDEMPOTENT: Rebuilds from source transactions.
-     * Default reads from event created_at date forward.
-     * Allows historical rebuild via 'start_date' or 'all_history' params.
-     * Only deletes participant periods being re-synced, preserving earlier history.
+     * Default reads from event created_at forward.
+     * Preserves earlier historical months unless 'all_history' or earlier 'start_date' is passed.
      */
     public function sync(Request $request, $id)
     {
         $event = Event::findOrFail($id);
 
-        // Determine start date for sync
         if ($request->filled('start_date')) {
             $startDate = Carbon::parse($request->start_date)->startOfDay();
         } elseif ($request->boolean('all_history')) {
             $startDate = Carbon::create(2020, 1, 1);
         } else {
-            // Default: from event creation date (start of day)
             $startDate = $event->created_at ? $event->created_at->copy()->startOfDay() : Carbon::now()->startOfMonth();
         }
 
-        $startPeriodKey = $startDate->format('Y-m');
-        $skippedCount = 0;
-        $totalTransactions = 0;
-        $insertedRows = 0;
-
         try {
-            DB::transaction(function () use ($event, $startDate, $startPeriodKey, &$skippedCount, &$totalTransactions, &$insertedRows) {
-                // Step 1: DELETE ONLY participants for periods being re-synced!
-                // Historical participants for earlier months are NOT touched.
-                EventParticipant::where('event_id', $event->id)
-                    ->where('period_key', '>=', $startPeriodKey)
-                    ->delete();
-
-                // Step 2: Read source transactions (voucher only, success only)
-                $transactions = Transaction::where('external_id', 'like', 'ND-%')
-                    ->where('status', 'success')
-                    ->where('created_at', '>=', $startDate)
-                    ->select('customer_phone', 'amount', 'created_at')
-                    ->get();
-
-                $totalTransactions = $transactions->count();
-
-                // Step 3: Normalize phones and group
-                $aggregated = [];
-
-                foreach ($transactions as $tx) {
-                    $normalizedPhone = PhoneNumberService::normalize($tx->customer_phone);
-
-                    if ($normalizedPhone === null) {
-                        $skippedCount++;
-                        Log::info("EventSync: Skipped transaction with invalid phone", [
-                            'event_id' => $event->id,
-                            'phone' => $tx->customer_phone,
-                        ]);
-                        continue;
-                    }
-
-                    $periodKey = Carbon::parse($tx->created_at)->format('Y-m');
-                    $groupKey = $normalizedPhone . '|' . $periodKey;
-
-                    if (!isset($aggregated[$groupKey])) {
-                        $aggregated[$groupKey] = [
-                            'phone' => $normalizedPhone,
-                            'period_key' => $periodKey,
-                            'total_purchase' => 0,
-                            'transaction_count' => 0,
-                            'first_transaction_at' => $tx->created_at,
-                            'last_transaction_at' => $tx->created_at,
-                        ];
-                    }
-
-                    $aggregated[$groupKey]['total_purchase'] += (float) $tx->amount;
-                    $aggregated[$groupKey]['transaction_count']++;
-
-                    if ($tx->created_at < $aggregated[$groupKey]['first_transaction_at']) {
-                        $aggregated[$groupKey]['first_transaction_at'] = $tx->created_at;
-                    }
-                    if ($tx->created_at > $aggregated[$groupKey]['last_transaction_at']) {
-                        $aggregated[$groupKey]['last_transaction_at'] = $tx->created_at;
-                    }
-                }
-
-                // Step 4: Batch insert aggregated participants
-                $now = Carbon::now();
-                $batchInsert = [];
-
-                foreach ($aggregated as $data) {
-                    $batchInsert[] = [
-                        'event_id' => $event->id,
-                        'phone' => $data['phone'],
-                        'period_key' => $data['period_key'],
-                        'total_purchase' => $data['total_purchase'],
-                        'transaction_count' => $data['transaction_count'],
-                        'first_transaction_at' => $data['first_transaction_at'],
-                        'last_transaction_at' => $data['last_transaction_at'],
-                        'created_at' => $now,
-                        'updated_at' => $now,
-                    ];
-                }
-
-                // Insert in chunks to avoid packet size issues
-                foreach (array_chunk($batchInsert, 500) as $chunk) {
-                    EventParticipant::insert($chunk);
-                }
-
-                $insertedRows = count($batchInsert);
-
-                // Step 5: Update event metadata
-                $uniquePhones = count(array_unique(array_column($batchInsert, 'phone')));
-
-                $event->update([
-                    'last_synced_at' => $now,
-                    'sync_stats' => [
-                        'start_date_synced' => $startDate->toDateString(),
-                        'total_transactions' => $totalTransactions,
-                        'skipped' => $skippedCount,
-                        'unique_phones' => $uniquePhones,
-                        'participant_rows' => $insertedRows,
-                        'synced_at' => $now->toIso8601String(),
-                    ],
-                ]);
-            });
+            $stats = $this->executeSync($event, $startDate);
 
             return response()->json([
                 'success' => true,
-                'message' => 'Sync berhasil.',
-                'stats' => [
-                    'start_date' => $startDate->toDateString(),
-                    'total_transactions' => $totalTransactions,
-                    'skipped' => $skippedCount,
-                    'participant_rows' => $insertedRows,
-                    'valid_transactions' => $totalTransactions - $skippedCount,
-                ],
+                'message' => 'Sync realtime data berhasil.',
+                'stats' => $stats,
             ]);
         } catch (\Exception $e) {
             Log::error("EventSync failed", [
                 'event_id' => $id,
                 'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString(),
             ]);
 
             return response()->json([
                 'success' => false,
-                'message' => 'Sync gagal. Data sebelumnya tetap aman (rollback).',
-                'error' => $e->getMessage(),
+                'message' => 'Sync gagal: ' . $e->getMessage(),
             ], 500);
         }
     }
 
     /**
-     * Get analytics for an event.
+     * Get real-time analytics for an event.
      * GET /admin/events/{id}/analytics
      */
     public function analytics(Request $request, $id)
     {
         $event = Event::findOrFail($id);
+
+        // If event is active and has no participants yet, auto-sync current month so real data appears instantly
+        if ($event->status === 'active' && $event->participants()->count() === 0) {
+            try {
+                $this->executeSync($event, Carbon::now()->startOfMonth());
+            } catch (\Exception $e) {
+                Log::warning('Auto-sync on initial analytics view failed: ' . $e->getMessage());
+            }
+        }
 
         // Available periods sorted descending (latest month first)
         $periods = EventParticipant::where('event_id', $event->id)
@@ -402,14 +320,15 @@ class EventController extends Controller
             'distribution' => $distribution,
             'periods' => $periods,
             'participants' => $paginatedParticipants,
+            'server_time' => Carbon::now()->toIso8601String(),
         ]);
     }
 
     /**
-     * Target simulation (read-only, no DB changes).
+     * Target qualification query (read-only calculation).
      * GET /admin/events/{id}/simulate?target=50000&period=2026-09
      * 
-     * Counts how many customers qualify for a given target amount per month.
+     * Counts how many customers reach a target amount per month.
      * Evaluated per customer per month.
      */
     public function simulate(Request $request, $id)
@@ -452,6 +371,111 @@ class EventController extends Controller
             'total_customers' => $totalCustomers,
             'percentage' => $percentage,
         ]);
+    }
+
+    /**
+     * Internal sync logic to aggregate source transactions.
+     */
+    private function executeSync(Event $event, Carbon $startDate): array
+    {
+        $startPeriodKey = $startDate->format('Y-m');
+        $skippedCount = 0;
+        $totalTransactions = 0;
+        $insertedRows = 0;
+
+        DB::transaction(function () use ($event, $startDate, $startPeriodKey, &$skippedCount, &$totalTransactions, &$insertedRows) {
+            // Delete only participants for periods being re-synced
+            EventParticipant::where('event_id', $event->id)
+                ->where('period_key', '>=', $startPeriodKey)
+                ->delete();
+
+            // Read source transactions (voucher only, success only)
+            $transactions = Transaction::where('external_id', 'like', 'ND-%')
+                ->where('status', 'success')
+                ->where('created_at', '>=', $startDate)
+                ->select('customer_phone', 'amount', 'created_at')
+                ->get();
+
+            $totalTransactions = $transactions->count();
+            $aggregated = [];
+
+            foreach ($transactions as $tx) {
+                $normalizedPhone = PhoneNumberService::normalize($tx->customer_phone);
+
+                if ($normalizedPhone === null) {
+                    $skippedCount++;
+                    continue;
+                }
+
+                $periodKey = Carbon::parse($tx->created_at)->format('Y-m');
+                $groupKey = $normalizedPhone . '|' . $periodKey;
+
+                if (!isset($aggregated[$groupKey])) {
+                    $aggregated[$groupKey] = [
+                        'phone' => $normalizedPhone,
+                        'period_key' => $periodKey,
+                        'total_purchase' => 0,
+                        'transaction_count' => 0,
+                        'first_transaction_at' => $tx->created_at,
+                        'last_transaction_at' => $tx->created_at,
+                    ];
+                }
+
+                $aggregated[$groupKey]['total_purchase'] += (float) $tx->amount;
+                $aggregated[$groupKey]['transaction_count']++;
+
+                if ($tx->created_at < $aggregated[$groupKey]['first_transaction_at']) {
+                    $aggregated[$groupKey]['first_transaction_at'] = $tx->created_at;
+                }
+                if ($tx->created_at > $aggregated[$groupKey]['last_transaction_at']) {
+                    $aggregated[$groupKey]['last_transaction_at'] = $tx->created_at;
+                }
+            }
+
+            $now = Carbon::now();
+            $batchInsert = [];
+
+            foreach ($aggregated as $data) {
+                $batchInsert[] = [
+                    'event_id' => $event->id,
+                    'phone' => $data['phone'],
+                    'period_key' => $data['period_key'],
+                    'total_purchase' => $data['total_purchase'],
+                    'transaction_count' => $data['transaction_count'],
+                    'first_transaction_at' => $data['first_transaction_at'],
+                    'last_transaction_at' => $data['last_transaction_at'],
+                    'created_at' => $now,
+                    'updated_at' => $now,
+                ];
+            }
+
+            foreach (array_chunk($batchInsert, 500) as $chunk) {
+                EventParticipant::insert($chunk);
+            }
+
+            $insertedRows = count($batchInsert);
+            $uniquePhones = count(array_unique(array_column($batchInsert, 'phone')));
+
+            $event->update([
+                'last_synced_at' => $now,
+                'sync_stats' => [
+                    'start_date_synced' => $startDate->toDateString(),
+                    'total_transactions' => $totalTransactions,
+                    'skipped' => $skippedCount,
+                    'unique_phones' => $uniquePhones,
+                    'participant_rows' => $insertedRows,
+                    'synced_at' => $now->toIso8601String(),
+                ],
+            ]);
+        });
+
+        return [
+            'start_date' => $startDate->toDateString(),
+            'total_transactions' => $totalTransactions,
+            'skipped' => $skippedCount,
+            'participant_rows' => $insertedRows,
+            'valid_transactions' => $totalTransactions - $skippedCount,
+        ];
     }
 
     /**
