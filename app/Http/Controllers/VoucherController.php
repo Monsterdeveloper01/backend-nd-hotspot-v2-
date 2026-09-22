@@ -88,7 +88,7 @@ class VoucherController extends Controller
 
     public function index(Request $request)
     {
-        $query = Voucher::with('plan')->latest();
+        $query = Voucher::with(['plan', 'transaction'])->latest();
 
         if ($search = $request->query('search')) {
             $query->where(function($q) use ($search) {

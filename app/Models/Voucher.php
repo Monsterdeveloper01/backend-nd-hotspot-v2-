@@ -28,4 +28,9 @@ class Voucher extends Model
     {
         return $this->belongsTo(VoucherPlan::class, 'voucher_plan_id');
     }
+
+    public function transaction()
+    {
+        return $this->hasOne(Transaction::class, 'voucher_id');
+    }
 }
