@@ -245,4 +245,41 @@ class PublicLoyaltyController extends Controller
             'reward' => $rewardData,
         ]);
     }
+
+    /**
+     * Get active loyalty event summary for public promotion banner.
+     * GET /api/loyalty/active-event
+     */
+    public function getActiveEvent()
+    {
+        $event = Event::where('status', 'active')->first();
+        if (!$event) {
+            return response()->json([
+                'success' => true,
+                'has_active_event' => false,
+            ]);
+        }
+
+        $rule = \App\Models\EventRewardRule::where('event_id', $event->id)
+            ->where('is_active', true)
+            ->with('voucherPlan')
+            ->first();
+
+        return response()->json([
+            'success' => true,
+            'has_active_event' => true,
+            'event' => [
+                'id' => $event->id,
+                'name' => $event->name,
+                'description' => $event->description,
+                'target_amount' => (float) $event->target_amount,
+                'target_amount_formatted' => 'Rp ' . number_format($event->target_amount, 0, ',', '.'),
+            ],
+            'reward_rule' => $rule ? [
+                'name' => $rule->name,
+                'voucher_plan' => $rule->voucherPlan?->name,
+                'duration' => $rule->voucherPlan?->duration,
+            ] : null,
+        ]);
+    }
 }
