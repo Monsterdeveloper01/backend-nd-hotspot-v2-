@@ -705,6 +705,16 @@ class EventController extends Controller
 
         $event = Event::findOrFail($id);
 
+        // Normalize aliases: amount / simulated_amount, expiry_minutes / expiry_override_minutes
+        $amount = $request->input('amount') ?? $request->input('simulated_amount');
+        $expiryMinutes = $request->input('expiry_minutes') ?? $request->input('expiry_override_minutes');
+        if ($amount !== null) {
+            $request->merge(['amount' => $amount]);
+        }
+        if ($expiryMinutes !== null) {
+            $request->merge(['expiry_minutes' => $expiryMinutes]);
+        }
+
         $validator = Validator::make($request->all(), [
             'phone' => 'required|string|min:8|max:25',
             'amount' => 'required|numeric|min:0',
@@ -720,7 +730,11 @@ class EventController extends Controller
         ]);
 
         if ($validator->fails()) {
-            return response()->json(['errors' => $validator->errors()], 422);
+            return response()->json([
+                'success' => false,
+                'message' => $validator->errors()->first(),
+                'errors' => $validator->errors()
+            ], 422);
         }
 
         $periodKey = $request->input('period_key') ?: Carbon::now()->format('Y-m');
@@ -738,6 +752,17 @@ class EventController extends Controller
             (float) $request->amount,
             $options
         );
+
+        // Add compatibility aliases for frontend
+        if (isset($result['reward']['voucher_code'])) {
+            $result['voucher_code'] = $result['reward']['voucher_code'];
+            $result['expires_at'] = $result['reward']['expires_at'];
+            $result['mikrotik_id'] = $result['reward']['mikrotik_id'] ?? null;
+        }
+        $result['target_reached'] = $result['is_target_achieved'] ?? false;
+        $result['progress_percent'] = $result['progress_percentage'] ?? 0;
+        $result['simulated_total_amount'] = $result['simulated_total_purchase'] ?? 0;
+        $result['reward_idempotent'] = $result['is_idempotent_duplicate'] ?? false;
 
         return response()->json($result, $result['success'] ? 200 : 400);
     }
