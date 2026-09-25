@@ -102,6 +102,11 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::delete('/admin/events/{id}/reward-rules/{ruleId}', [EventController::class, 'deleteRewardRule']);
     Route::post('/admin/events/{id}/reward-rules/{ruleId}/process-eligible', [EventController::class, 'processRetroactiveRewards']);
     Route::post('/admin/events/{id}/rewards/{rewardId}/retry', [EventController::class, 'retryReward']);
+
+    // Admin: Loyalty Test Mode (Simulation & Integration Test)
+    Route::get('/admin/events/{id}/loyalty-test/status', [EventController::class, 'getLoyaltyTestStatus']);
+    Route::post('/admin/events/{id}/loyalty-test/run', [EventController::class, 'runLoyaltyTest']);
+    Route::post('/admin/events/{id}/loyalty-test/reset', [EventController::class, 'resetLoyaltyTest']);
 });
 
 // Public: System Config & Tracking

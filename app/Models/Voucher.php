@@ -11,6 +11,7 @@ class Voucher extends Model
         'code',
         'customer_phone',
         'source',
+        'is_test',
         'price',
         'status',
         'mikrotik_id',
@@ -20,6 +21,7 @@ class Voucher extends Model
     ];
 
     protected $casts = [
+        'is_test' => 'boolean',
         'used_at' => 'datetime',
         'expires_at' => 'datetime',
         'price' => 'decimal:2',

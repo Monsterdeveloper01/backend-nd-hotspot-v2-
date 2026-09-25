@@ -28,6 +28,7 @@ class EventReward extends Model
         'reward_type',
         'reward_value',
         'status',
+        'is_test',
         'voucher_id',
         'granted_at',
         'issued_at',
@@ -36,6 +37,7 @@ class EventReward extends Model
     ];
 
     protected $casts = [
+        'is_test' => 'boolean',
         'granted_at' => 'datetime',
         'issued_at' => 'datetime',
         'expires_at' => 'datetime',

@@ -111,6 +111,15 @@ class PublicLoyaltyController extends Controller
         $monthNum = $now->format('m');
         $periodFormatted = ($monthNames[$monthNum] ?? $now->format('F')) . ' ' . $now->format('Y');
 
+        $isTestMode = env('LOYALTY_TEST_MODE', false) === true || env('LOYALTY_TEST_MODE', false) === 'true';
+        $testState = null;
+        if ($isTestMode) {
+            $testState = \App\Models\EventTestState::where('event_id', $event->id)
+                ->where('phone', $normalizedPhone)
+                ->where('period_key', $periodKey)
+                ->first();
+        }
+
         // 7. Query event_participants strictly for this event + phone + period_key (READ-ONLY)
         $participant = EventParticipant::where('event_id', $event->id)
             ->where('phone', $normalizedPhone)
@@ -119,12 +128,26 @@ class PublicLoyaltyController extends Controller
 
         $targetAmount = (float) $event->target_amount;
 
-        // Empty state: Customer hasn't purchased any voucher this calendar month
-        if (!$participant || (float) $participant->total_purchase <= 0) {
+        $totalPurchase = 0;
+        $transactionCount = 0;
+        $isSimulated = false;
+
+        if ($testState) {
+            $totalPurchase = (float) $testState->simulated_total_purchase;
+            $transactionCount = (int) $testState->simulated_transaction_count;
+            $isSimulated = true;
+        } elseif ($participant) {
+            $totalPurchase = (float) $participant->total_purchase;
+            $transactionCount = (int) $participant->transaction_count;
+        }
+
+        // Empty state: Customer hasn't purchased any voucher this calendar month (and no test simulation)
+        if ($totalPurchase <= 0) {
             return response()->json([
                 'success' => true,
                 'has_active_event' => true,
                 'found' => false,
+                'is_test_mode' => $isSimulated,
                 'event_name' => $event->name,
                 'period_key' => $periodKey,
                 'period_formatted' => $periodFormatted,
@@ -135,9 +158,6 @@ class PublicLoyaltyController extends Controller
         }
 
         // 8. Calculate actual progress metrics
-        $totalPurchase = (float) $participant->total_purchase;
-        $transactionCount = (int) $participant->transaction_count;
-
         $progressPercentage = $targetAmount > 0
             ? round(($totalPurchase / $targetAmount) * 100, 1)
             : 100.0;
@@ -210,6 +230,7 @@ class PublicLoyaltyController extends Controller
             'success' => true,
             'has_active_event' => true,
             'found' => true,
+            'is_test_mode' => $isSimulated,
             'event_name' => $event->name,
             'period_key' => $periodKey,
             'period_formatted' => $periodFormatted,

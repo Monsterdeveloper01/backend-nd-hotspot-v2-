@@ -6,12 +6,14 @@ use App\Models\Event;
 use App\Models\EventParticipant;
 use App\Models\EventReward;
 use App\Models\EventRewardRule;
+use App\Models\EventTestState;
 use App\Models\Voucher;
 use Carbon\Carbon;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
 
 /**
  * RewardService
@@ -395,6 +397,371 @@ class RewardService
                 'phone' => $phone,
                 'error' => $e->getMessage(),
             ]);
+        }
+    }
+
+    /**
+     * Run isolated Loyalty Test Simulation.
+     * 
+     * Requirements:
+     * - NO fake records in transactions table
+     * - NO fake Midtrans payment
+     * - NO change to sales reports or revenue
+     * - Does NOT call MikroTik router UNLESS $options['use_real_mikrotik'] === true
+     * - WhatsApp notice sent ONLY IF $options['send_whatsapp'] === true or LOYALTY_TEST_WHATSAPP=true
+     * - Configurable expiry override for fast testing
+     */
+    public function runLoyaltyTest(Event $event, string $rawPhone, string $periodKey, float $amount, array $options = []): array
+    {
+        $phone = PhoneNumberService::normalize($rawPhone);
+        if (!$phone) {
+            return [
+                'success' => false,
+                'message' => 'Format nomor HP tidak valid. Gunakan format seperti 08123456789 atau 628123456789.',
+            ];
+        }
+
+        $useRealMikrotik = !empty($options['use_real_mikrotik']);
+        $expiryMinutes = isset($options['expiry_minutes']) && is_numeric($options['expiry_minutes']) ? (int) $options['expiry_minutes'] : null;
+        $sendWhatsApp = !empty($options['send_whatsapp']) || env('LOYALTY_TEST_WHATSAPP', false) === true;
+
+        // 1. Record isolated simulated state in event_test_states (zero impact on transactions table)
+        $testState = EventTestState::updateOrCreate(
+            [
+                'event_id' => $event->id,
+                'phone' => $phone,
+                'period_key' => $periodKey,
+            ],
+            [
+                'simulated_total_purchase' => $amount,
+                'simulated_transaction_count' => max(1, (int) round($amount / 10000)),
+                'use_real_mikrotik' => $useRealMikrotik,
+            ]
+        );
+
+        $targetAmount = (float) $event->target_amount;
+        $isTargetAchieved = $targetAmount > 0 ? ($amount >= $targetAmount) : true;
+        $progressPercentage = $targetAmount > 0 ? round(($amount / $targetAmount) * 100, 1) : 100.0;
+        $remainingAmount = max(0, $targetAmount - $amount);
+
+        // Broadcast realtime update to admin and public loyalty
+        $this->broadcastTestProgress($event, $phone, $periodKey, $amount);
+
+        // Case A: Progress below target
+        if (!$isTargetAchieved) {
+            return [
+                'success' => true,
+                'is_target_achieved' => false,
+                'phone' => $phone,
+                'period_key' => $periodKey,
+                'simulated_total_purchase' => $amount,
+                'target_amount' => $targetAmount,
+                'progress_percentage' => $progressPercentage,
+                'remaining_amount' => $remainingAmount,
+                'status' => 'progress_updated',
+                'message' => 'Simulasi progress berhasil dicatat (' . $progressPercentage . '%). Target belum tercapai, voucher reward belum diterbitkan.',
+                'reward' => null,
+            ];
+        }
+
+        // Case B: Target reached! Check active reward rule
+        $rule = EventRewardRule::where('event_id', $event->id)
+            ->where('is_active', true)
+            ->with('voucherPlan')
+            ->first();
+
+        if (!$rule) {
+            return [
+                'success' => true,
+                'is_target_achieved' => true,
+                'phone' => $phone,
+                'period_key' => $periodKey,
+                'simulated_total_purchase' => $amount,
+                'target_amount' => $targetAmount,
+                'progress_percentage' => $progressPercentage,
+                'remaining_amount' => 0,
+                'status' => 'target_reached_no_rule',
+                'message' => 'Target tercapai! Namun belum ada Reward Rule aktif yang dikonfigurasi untuk event ini.',
+                'reward' => null,
+            ];
+        }
+
+        // Check idempotency: does a reward already exist for this (event_id, phone, period_key, rule_id)?
+        $existing = EventReward::where('event_id', $event->id)
+            ->where('phone', $phone)
+            ->where('period_key', $periodKey)
+            ->where('event_reward_rule_id', $rule->id)
+            ->with('voucher')
+            ->first();
+
+        if ($existing && in_array($existing->status, ['issued', 'used'])) {
+            return [
+                'success' => true,
+                'is_target_achieved' => true,
+                'is_idempotent_duplicate' => true,
+                'phone' => $phone,
+                'period_key' => $periodKey,
+                'simulated_total_purchase' => $amount,
+                'target_amount' => $targetAmount,
+                'progress_percentage' => $progressPercentage,
+                'remaining_amount' => 0,
+                'status' => 'already_rewarded',
+                'message' => 'IDEMPOTENCY TERVERIFIKASI: Customer sudah memiliki reward sebelumnya. Sistem menolak membuat reward/voucher ganda.',
+                'reward' => [
+                    'id' => $existing->id,
+                    'status' => $existing->status,
+                    'rule_name' => $rule->name,
+                    'voucher_code' => $existing->voucher?->code,
+                    'issued_at' => $existing->issued_at?->format('d M Y, H:i'),
+                    'expires_at' => $existing->expires_at?->format('d M Y, H:i'),
+                    'is_test' => (bool) $existing->is_test,
+                ],
+            ];
+        }
+
+        // Create or reuse reward record atomically
+        if ($existing) {
+            $reward = $existing;
+            $reward->update([
+                'status' => 'processing',
+                'is_test' => true,
+                'error_message' => null,
+            ]);
+        } else {
+            try {
+                $reward = EventReward::create([
+                    'event_id' => $event->id,
+                    'event_reward_rule_id' => $rule->id,
+                    'phone' => $phone,
+                    'period_key' => $periodKey,
+                    'reward_type' => 'voucher',
+                    'reward_value' => $rule->voucherPlan?->name ?? 'Reward Voucher (Test)',
+                    'status' => 'processing',
+                    'is_test' => true,
+                    'granted_at' => Carbon::now(),
+                ]);
+            } catch (QueryException $e) {
+                $reward = EventReward::where('event_id', $event->id)
+                    ->where('phone', $phone)
+                    ->where('period_key', $periodKey)
+                    ->where('event_reward_rule_id', $rule->id)
+                    ->first();
+            }
+        }
+
+        // Generate voucher code
+        $plan = $rule->voucherPlan;
+        $issuedAt = Carbon::now();
+
+        // Calculate expiry: custom test expiry (e.g. 1 minute) or standard 5 days
+        if ($expiryMinutes && $expiryMinutes > 0) {
+            $expiresAt = (clone $issuedAt)->addMinutes($expiryMinutes);
+        } else {
+            $expiresAt = (clone $issuedAt)->addDays(5);
+        }
+
+        $chars = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+        do {
+            $voucherCode = substr(str_shuffle(str_repeat($chars, 6)), 0, 6);
+        } while (Voucher::where('code', $voucherCode)->exists());
+
+        // Handle MikroTik based on Level A (Simulation) vs Level B (Integration)
+        $mikrotikId = null;
+        $mikrotikSuccess = false;
+        $mikrotikMode = 'mock';
+
+        if ($useRealMikrotik) {
+            // Level B: Real MikroTik Integration Test
+            $mikrotikMode = 'real_mikrotik';
+            try {
+                $profileName = $plan ? ($plan->mikrotik_profile ?: $plan->name) : 'default';
+                $limitUptime = $expiryMinutes ? "{$expiryMinutes}m" : '5d';
+
+                $mikrotikResult = $this->mikrotik->createUser([
+                    'username' => $voucherCode,
+                    'password' => '',
+                    'profile' => $profileName,
+                    'comment' => 'TEST REWARD: ' . substr($rule->name, 0, 20) . ' Exp:' . $expiresAt->format('d/m/Y H:i'),
+                    'limit_uptime' => $limitUptime,
+                ]);
+
+                if (is_array($mikrotikResult) && (isset($mikrotikResult[0]['.id']) || !isset($mikrotikResult['!trap']))) {
+                    $mikrotikId = $mikrotikResult[0]['.id'] ?? 'created';
+                    $mikrotikSuccess = true;
+                } else {
+                    $reward->update([
+                        'status' => 'failed',
+                        'error_message' => 'MikroTik real test trap: ' . json_encode($mikrotikResult),
+                    ]);
+                    return [
+                        'success' => false,
+                        'message' => 'Gagal membuat user di router MikroTik nyata.',
+                        'error' => $mikrotikResult,
+                    ];
+                }
+            } catch (\Throwable $e) {
+                $reward->update([
+                    'status' => 'failed',
+                    'error_message' => 'MikroTik real test exception: ' . $e->getMessage(),
+                ]);
+                return [
+                    'success' => false,
+                    'message' => 'Exception koneksi MikroTik: ' . $e->getMessage(),
+                ];
+            }
+        } else {
+            // Level A: Simulation Test (Mock MikroTik)
+            $mikrotikMode = 'simulation_mock';
+            $mikrotikId = 'SIM-MTK-' . strtoupper(Str::random(6));
+            $mikrotikSuccess = true;
+        }
+
+        // Save Voucher with is_test = true and source = 'reward'
+        $voucher = Voucher::create([
+            'voucher_plan_id' => $plan?->id,
+            'code' => $voucherCode,
+            'price' => 0.00,
+            'status' => 'sold',
+            'source' => 'reward',
+            'is_test' => true,
+            'customer_phone' => $phone,
+            'mikrotik_id' => $mikrotikId,
+            'expires_at' => $expiresAt,
+        ]);
+
+        // Transition reward status to issued
+        $reward->update([
+            'status' => 'issued',
+            'voucher_id' => $voucher->id,
+            'issued_at' => $issuedAt,
+            'expires_at' => $expiresAt,
+            'error_message' => null,
+        ]);
+
+        // Realtime broadcast to Socket.IO
+        $this->broadcastRewardIssued($event, $reward, $voucher, $phone, $periodKey);
+
+        // Optional WhatsApp Notification
+        if ($sendWhatsApp) {
+            $this->sendRewardWhatsAppNotification($rule, $voucherCode, $phone, $expiresAt);
+        }
+
+        return [
+            'success' => true,
+            'is_target_achieved' => true,
+            'is_idempotent_duplicate' => false,
+            'phone' => $phone,
+            'period_key' => $periodKey,
+            'simulated_total_purchase' => $amount,
+            'target_amount' => $targetAmount,
+            'progress_percentage' => $progressPercentage,
+            'remaining_amount' => 0,
+            'status' => 'reward_issued',
+            'mode' => $mikrotikMode,
+            'message' => '🎉 Reward berhasil diterbitkan! ' . ($useRealMikrotik ? '(Tercatat di MikroTik Router Nyata)' : '(Mode Simulasi Aman - Router MikroTik Tidak Disentuh)'),
+            'reward' => [
+                'id' => $reward->id,
+                'status' => 'issued',
+                'rule_name' => $rule->name,
+                'voucher_code' => $voucherCode,
+                'issued_at' => $issuedAt->format('d M Y, H:i'),
+                'expires_at' => $expiresAt->format('d M Y, H:i'),
+                'expires_at_formatted' => $expiresAt->translatedFormat('d F Y, H:i'),
+                'is_test' => true,
+                'mikrotik_mode' => $mikrotikMode,
+                'mikrotik_id' => $mikrotikId,
+            ],
+        ];
+    }
+
+    /**
+     * Reset loyalty test data safely without touching production records.
+     * 
+     * Cleans up ONLY:
+     * - event_test_states
+     * - event_rewards WHERE is_test = true
+     * - vouchers WHERE is_test = true
+     * - If real MikroTik was used for a test voucher, deletes the test user from router
+     */
+    public function resetLoyaltyTest(Event $event, ?string $rawPhone = null): array
+    {
+        $normalizedPhone = $rawPhone ? PhoneNumberService::normalize($rawPhone) : null;
+
+        // 1. Find test rewards
+        $rewardsQuery = EventReward::where('event_id', $event->id)->where('is_test', true);
+        if ($normalizedPhone) {
+            $rewardsQuery->where('phone', $normalizedPhone);
+        }
+        $testRewards = $rewardsQuery->with('voucher')->get();
+
+        $cleanedVouchersCount = 0;
+        $cleanedMtkUsersCount = 0;
+
+        foreach ($testRewards as $reward) {
+            if ($reward->voucher) {
+                // If real MikroTik was used, clean it up
+                if (!str_starts_with($reward->voucher->mikrotik_id ?? '', 'SIM-MTK-')) {
+                    try {
+                        $this->mikrotik->removeHotspotUser($reward->voucher->code);
+                        $cleanedMtkUsersCount++;
+                    } catch (\Throwable $e) {
+                        Log::warning('ResetLoyaltyTest: Failed to remove test user from MikroTik', ['code' => $reward->voucher->code]);
+                    }
+                }
+                $reward->voucher->delete();
+                $cleanedVouchersCount++;
+            }
+            $reward->delete();
+        }
+
+        // Also clean any dangling test vouchers with is_test = true for this phone
+        $orphanVouchersQuery = Voucher::where('is_test', true);
+        if ($normalizedPhone) {
+            $orphanVouchersQuery->where('customer_phone', $normalizedPhone);
+        }
+        $cleanedVouchersCount += $orphanVouchersQuery->delete();
+
+        // 2. Delete test states
+        $statesQuery = EventTestState::where('event_id', $event->id);
+        if ($normalizedPhone) {
+            $statesQuery->where('phone', $normalizedPhone);
+        }
+        $cleanedStatesCount = $statesQuery->delete();
+
+        // Broadcast update via Socket.IO so public and admin UI immediately refresh
+        if ($normalizedPhone) {
+            $this->broadcastTestProgress($event, $normalizedPhone, Carbon::now()->format('Y-m'), 0);
+        }
+
+        return [
+            'success' => true,
+            'message' => 'Data test loyalty berhasil direset. Data transaksi dan voucher produksi 100% aman.',
+            'stats' => [
+                'cleaned_states' => $cleanedStatesCount,
+                'cleaned_rewards' => $testRewards->count(),
+                'cleaned_vouchers' => $cleanedVouchersCount,
+                'cleaned_mikrotik_users' => $cleanedMtkUsersCount,
+            ],
+        ];
+    }
+
+    /**
+     * Broadcast simulated test progress to Socket.IO.
+     */
+    protected function broadcastTestProgress(Event $event, string $phone, string $periodKey, float $amount): void
+    {
+        try {
+            $waGatewayUrl = env('WHATSAPP_GATEWAY_URL', 'http://localhost:5000');
+            Http::timeout(1)->asJson()->post("{$waGatewayUrl}/broadcast-analytics", [
+                'event_id' => $event->id,
+                'phone' => $phone,
+                'period_key' => $periodKey,
+                'amount' => $amount,
+                'is_test' => true,
+                'timestamp' => Carbon::now()->toIso8601String(),
+            ]);
+        } catch (\Throwable $e) {
+            // Non-blocking
         }
     }
 }

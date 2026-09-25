@@ -361,6 +361,11 @@ class EventController extends Controller
                 'processing' => $totalRewardsProcessing,
                 'failed' => $totalRewardsFailed,
             ],
+            'test_mode' => [
+                'enabled' => env('LOYALTY_TEST_MODE', false) === true || env('LOYALTY_TEST_MODE', false) === 'true',
+                'whatsapp_enabled' => env('LOYALTY_TEST_WHATSAPP', false) === true || env('LOYALTY_TEST_WHATSAPP', false) === 'true',
+                'active_test_states_count' => \App\Models\EventTestState::where('event_id', $event->id)->count(),
+            ],
             'distribution' => $distribution,
             'periods' => $periods,
             'participants' => $paginatedParticipants,
@@ -660,5 +665,102 @@ class EventController extends Controller
             'reward' => $res,
             'message' => ($res && $res->status === 'issued') ? 'Reward berhasil diterbitkan.' : 'Penerbitan reward gagal: ' . ($res?->error_message ?? 'Error'),
         ]);
+    }
+
+    /**
+     * Check Loyalty Test Mode status and config.
+     * GET /admin/events/{id}/loyalty-test/status
+     */
+    public function getLoyaltyTestStatus($id)
+    {
+        $event = Event::findOrFail($id);
+        $enabled = env('LOYALTY_TEST_MODE', false) === true || env('LOYALTY_TEST_MODE', false) === 'true';
+        $whatsappEnabled = env('LOYALTY_TEST_WHATSAPP', false) === true || env('LOYALTY_TEST_WHATSAPP', false) === 'true';
+
+        $activeTestStates = \App\Models\EventTestState::where('event_id', $event->id)->count();
+        $testRewardsCount = \App\Models\EventReward::where('event_id', $event->id)->where('is_test', true)->count();
+
+        return response()->json([
+            'enabled' => $enabled,
+            'whatsapp_enabled' => $whatsappEnabled,
+            'active_test_states' => $activeTestStates,
+            'test_rewards_count' => $testRewardsCount,
+            'event_target_amount' => (float) $event->target_amount,
+        ]);
+    }
+
+    /**
+     * Run isolated Loyalty Test simulation.
+     * POST /admin/events/{id}/loyalty-test/run
+     */
+    public function runLoyaltyTest(Request $request, $id)
+    {
+        $enabled = env('LOYALTY_TEST_MODE', false) === true || env('LOYALTY_TEST_MODE', false) === 'true';
+        if (!$enabled) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Loyalty Test Mode is disabled. Set LOYALTY_TEST_MODE=true in .env to enable.',
+            ], 403);
+        }
+
+        $event = Event::findOrFail($id);
+
+        $validator = Validator::make($request->all(), [
+            'phone' => 'required|string|min:8|max:25',
+            'amount' => 'required|numeric|min:0',
+            'period_key' => 'nullable|string|regex:/^\d{4}-\d{2}$/',
+            'use_real_mikrotik' => 'nullable|boolean',
+            'expiry_minutes' => 'nullable|integer|min:1|max:43200',
+            'send_whatsapp' => 'nullable|boolean',
+        ], [
+            'phone.required' => 'Nomor HP/WhatsApp wajib diisi.',
+            'amount.required' => 'Nominal simulasi belanja wajib diisi.',
+            'amount.numeric' => 'Nominal belanja harus berupa angka.',
+            'amount.min' => 'Nominal belanja minimal 0.',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json(['errors' => $validator->errors()], 422);
+        }
+
+        $periodKey = $request->input('period_key') ?: Carbon::now()->format('Y-m');
+
+        $options = [
+            'use_real_mikrotik' => $request->boolean('use_real_mikrotik'),
+            'expiry_minutes' => $request->input('expiry_minutes'),
+            'send_whatsapp' => $request->boolean('send_whatsapp'),
+        ];
+
+        $result = app(RewardService::class)->runLoyaltyTest(
+            $event,
+            $request->phone,
+            $periodKey,
+            (float) $request->amount,
+            $options
+        );
+
+        return response()->json($result, $result['success'] ? 200 : 400);
+    }
+
+    /**
+     * Reset isolated Loyalty Test data.
+     * POST /admin/events/{id}/loyalty-test/reset
+     */
+    public function resetLoyaltyTest(Request $request, $id)
+    {
+        $enabled = env('LOYALTY_TEST_MODE', false) === true || env('LOYALTY_TEST_MODE', false) === 'true';
+        if (!$enabled) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Loyalty Test Mode is disabled. Set LOYALTY_TEST_MODE=true in .env to enable.',
+            ], 403);
+        }
+
+        $event = Event::findOrFail($id);
+        $phone = $request->input('phone');
+
+        $result = app(RewardService::class)->resetLoyaltyTest($event, $phone);
+
+        return response()->json($result);
     }
 }
