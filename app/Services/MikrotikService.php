@@ -233,12 +233,19 @@ public function setUserStatus($username, $enabled)
     public function createUser($data)
     {
         if (!$this->connect()) return false;
-        $result = $this->client->comm('/ip/hotspot/user/add', [
+        
+        $params = [
             'name'     => $data['username'],
             'password' => $data['password'] ?? '',
             'profile'  => $data['profile'] ?? 'default',
             'comment'  => $data['comment'] ?? 'Created by ND Hotspot'
-        ]);
+        ];
+
+        if (!empty($data['limit_uptime'])) {
+            $params['limit-uptime'] = $data['limit_uptime'];
+        }
+
+        $result = $this->client->comm('/ip/hotspot/user/add', $params);
         $this->disconnect();
         return $result;
     }

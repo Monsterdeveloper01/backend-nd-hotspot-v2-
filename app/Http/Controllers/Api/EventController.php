@@ -6,7 +6,11 @@ use App\Http\Controllers\Controller;
 use App\Models\Event;
 use App\Models\EventParticipant;
 use App\Models\Transaction;
+use App\Models\EventReward;
+use App\Models\EventRewardRule;
+use App\Models\VoucherPlan;
 use App\Services\PhoneNumberService;
+use App\Services\RewardService;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -281,15 +285,49 @@ class EventController extends Controller
 
         $paginatedParticipants = $participantsTableQuery->paginate(20);
 
-        // Include target achievement status and unmasked phone in participant rows
-        $paginatedParticipants->getCollection()->transform(function ($p) use ($targetAmount) {
+        // Preload rewards for participants on the current page (Phase 2: Automatic Reward System)
+        $phones = $paginatedParticipants->getCollection()->pluck('phone')->all();
+        $periodKeys = $paginatedParticipants->getCollection()->pluck('period_key')->all();
+
+        $rewards = EventReward::where('event_id', $event->id)
+            ->whereIn('phone', $phones)
+            ->whereIn('period_key', $periodKeys)
+            ->with(['rule', 'voucher'])
+            ->get()
+            ->keyBy(fn($r) => "{$r->phone}_{$r->period_key}");
+
+        // Include target achievement status, unmasked phone, and reward in participant rows
+        $paginatedParticipants->getCollection()->transform(function ($p) use ($targetAmount, $rewards) {
+            $key = "{$p->phone}_{$p->period_key}";
+            $reward = $rewards->get($key);
+
             $p->avg_per_transaction = $p->transaction_count > 0
                 ? round($p->total_purchase / $p->transaction_count, 2)
                 : 0;
             $p->target_amount = $targetAmount;
             $p->is_target_achieved = $targetAmount > 0 && (float) $p->total_purchase >= $targetAmount;
+            $p->reward = $reward ? [
+                'id' => $reward->id,
+                'status' => $reward->status,
+                'rule_name' => $reward->rule?->name,
+                'voucher_code' => $reward->voucher?->code,
+                'issued_at' => $reward->issued_at?->format('d M Y, H:i'),
+                'expires_at' => $reward->expires_at?->format('d M Y, H:i'),
+                'error_message' => $reward->error_message,
+            ] : null;
             return $p;
         });
+
+        // Rewards summary
+        $totalRewardsIssued = EventReward::where('event_id', $event->id)
+            ->where('status', 'issued')
+            ->count();
+        $totalRewardsProcessing = EventReward::where('event_id', $event->id)
+            ->where('status', 'processing')
+            ->count();
+        $totalRewardsFailed = EventReward::where('event_id', $event->id)
+            ->where('status', 'failed')
+            ->count();
 
         return response()->json([
             'event' => [
@@ -316,6 +354,12 @@ class EventController extends Controller
                 'qualifying_customers' => $targetQualifying,
                 'total_customers' => $totalUniqueCustomers,
                 'percentage' => $targetPercentage,
+            ],
+            'reward_rules' => $event->rewardRules()->with('voucherPlan')->get(),
+            'reward_stats' => [
+                'issued' => $totalRewardsIssued,
+                'processing' => $totalRewardsProcessing,
+                'failed' => $totalRewardsFailed,
             ],
             'distribution' => $distribution,
             'periods' => $periods,
@@ -459,5 +503,162 @@ class EventController extends Controller
         return array_map(function ($b) {
             return ['range' => $b['range'], 'count' => $b['count']];
         }, $buckets);
+    }
+
+    /**
+     * Get reward rules for an event.
+     * GET /admin/events/{id}/reward-rules
+     */
+    public function getRewardRules($id)
+    {
+        $event = Event::findOrFail($id);
+        $rules = $event->rewardRules()->with('voucherPlan')->get();
+        return response()->json($rules);
+    }
+
+    /**
+     * Create a new reward rule.
+     * POST /admin/events/{id}/reward-rules
+     */
+    public function storeRewardRule(Request $request, $id)
+    {
+        $event = Event::findOrFail($id);
+
+        $validator = Validator::make($request->all(), [
+            'voucher_plan_id' => 'required|exists:voucher_plans,id',
+            'name' => 'required|string|max:255',
+            'description' => 'nullable|string|max:1000',
+            'is_active' => 'nullable|boolean',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json(['errors' => $validator->errors()], 422);
+        }
+
+        $rule = EventRewardRule::create([
+            'event_id' => $event->id,
+            'voucher_plan_id' => $request->voucher_plan_id,
+            'name' => $request->name,
+            'description' => $request->description,
+            'is_active' => $request->input('is_active', true),
+        ]);
+
+        $retroactiveStats = null;
+        // Requirement #6: REWARD RULE CREATED AFTER CUSTOMER ALREADY REACHED TARGET
+        // When active rule is created, immediately process existing eligible participants
+        if ($rule->is_active) {
+            try {
+                $retroactiveStats = app(RewardService::class)->processExistingEligible($rule);
+            } catch (\Throwable $e) {
+                Log::warning('RewardService: Retroactive processing on rule creation failed', ['error' => $e->getMessage()]);
+            }
+        }
+
+        return response()->json([
+            'rule' => $rule->load('voucherPlan'),
+            'retroactive_stats' => $retroactiveStats,
+            'message' => 'Reward rule berhasil dibuat.',
+        ], 201);
+    }
+
+    /**
+     * Update an existing reward rule.
+     * PUT /admin/events/{id}/reward-rules/{ruleId}
+     */
+    public function updateRewardRule(Request $request, $id, $ruleId)
+    {
+        $event = Event::findOrFail($id);
+        $rule = EventRewardRule::where('event_id', $event->id)->findOrFail($ruleId);
+
+        $validator = Validator::make($request->all(), [
+            'voucher_plan_id' => 'sometimes|required|exists:voucher_plans,id',
+            'name' => 'sometimes|required|string|max:255',
+            'description' => 'nullable|string|max:1000',
+            'is_active' => 'nullable|boolean',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json(['errors' => $validator->errors()], 422);
+        }
+
+        $wasInactive = !$rule->is_active;
+
+        $rule->update($request->only([
+            'voucher_plan_id', 'name', 'description', 'is_active'
+        ]));
+
+        $retroactiveStats = null;
+        // If activated from inactive state, retroactively process eligible customers
+        if ($wasInactive && $rule->is_active) {
+            try {
+                $retroactiveStats = app(RewardService::class)->processExistingEligible($rule);
+            } catch (\Throwable $e) {
+                Log::warning('RewardService: Retroactive processing on rule activation failed', ['error' => $e->getMessage()]);
+            }
+        }
+
+        return response()->json([
+            'rule' => $rule->load('voucherPlan'),
+            'retroactive_stats' => $retroactiveStats,
+            'message' => 'Reward rule berhasil diperbarui.',
+        ]);
+    }
+
+    /**
+     * Delete a reward rule.
+     * DELETE /admin/events/{id}/reward-rules/{ruleId}
+     */
+    public function deleteRewardRule($id, $ruleId)
+    {
+        $event = Event::findOrFail($id);
+        $rule = EventRewardRule::where('event_id', $event->id)->findOrFail($ruleId);
+        $rule->delete();
+
+        return response()->json(['message' => 'Reward rule berhasil dihapus.']);
+    }
+
+    /**
+     * Manually trigger retroactive processing for eligible customers under a rule.
+     * POST /admin/events/{id}/reward-rules/{ruleId}/process-eligible
+     */
+    public function processRetroactiveRewards($id, $ruleId)
+    {
+        $event = Event::findOrFail($id);
+        $rule = EventRewardRule::where('event_id', $event->id)->findOrFail($ruleId);
+
+        $stats = app(RewardService::class)->processExistingEligible($rule);
+
+        return response()->json([
+            'success' => true,
+            'stats' => $stats,
+            'message' => "Proses reward selesai. {$stats['issued']} diterbitkan, {$stats['skipped']} dilewati, {$stats['failed']} gagal.",
+        ]);
+    }
+
+    /**
+     * Retry a failed reward issuance.
+     * POST /admin/events/{id}/rewards/{rewardId}/retry
+     */
+    public function retryReward($id, $rewardId)
+    {
+        $event = Event::findOrFail($id);
+        $reward = EventReward::where('event_id', $event->id)->with('rule')->findOrFail($rewardId);
+
+        if ($reward->status === 'issued') {
+            return response()->json(['message' => 'Reward sudah berstatus issued.'], 400);
+        }
+
+        $rule = $reward->rule;
+        if (!$rule) {
+            return response()->json(['message' => 'Reward rule tidak ditemukan.'], 404);
+        }
+
+        $res = app(RewardService::class)->processSingleReward($event, $rule, $reward->phone, $reward->period_key);
+
+        return response()->json([
+            'success' => $res && $res->status === 'issued',
+            'reward' => $res,
+            'message' => ($res && $res->status === 'issued') ? 'Reward berhasil diterbitkan.' : 'Penerbitan reward gagal: ' . ($res?->error_message ?? 'Error'),
+        ]);
     }
 }

@@ -94,6 +94,14 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::delete('/admin/events/{id}', [EventController::class, 'destroy']);
     Route::post('/admin/events/{id}/sync', [EventController::class, 'sync']);
     Route::get('/admin/events/{id}/analytics', [EventController::class, 'analytics']);
+
+    // Admin: Event Reward Rules & Automation (Phase 2 — Automatic Reward System)
+    Route::get('/admin/events/{id}/reward-rules', [EventController::class, 'getRewardRules']);
+    Route::post('/admin/events/{id}/reward-rules', [EventController::class, 'storeRewardRule']);
+    Route::put('/admin/events/{id}/reward-rules/{ruleId}', [EventController::class, 'updateRewardRule']);
+    Route::delete('/admin/events/{id}/reward-rules/{ruleId}', [EventController::class, 'deleteRewardRule']);
+    Route::post('/admin/events/{id}/reward-rules/{ruleId}/process-eligible', [EventController::class, 'processRetroactiveRewards']);
+    Route::post('/admin/events/{id}/rewards/{rewardId}/retry', [EventController::class, 'retryReward']);
 });
 
 // Public: System Config & Tracking

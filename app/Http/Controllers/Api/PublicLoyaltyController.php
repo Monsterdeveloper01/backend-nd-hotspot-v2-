@@ -145,7 +145,67 @@ class PublicLoyaltyController extends Controller
         $remainingAmount = max(0, $targetAmount - $totalPurchase);
         $isTargetAchieved = $targetAmount > 0 ? ($totalPurchase >= $targetAmount) : true;
 
-        // 9. Return progress data safely (strictly isolated to this phone)
+        // 9. Load reward details if target achieved (Phase 2: Automatic Reward System)
+        $rewardData = null;
+        if ($isTargetAchieved) {
+            $reward = \App\Models\EventReward::where('event_id', $event->id)
+                ->where('phone', $normalizedPhone)
+                ->where('period_key', $periodKey)
+                ->with(['rule', 'voucher'])
+                ->first();
+
+            // Self-healing: if customer met target but reward is not yet issued (e.g. rule created later),
+            // trigger reward check automatically
+            if (!$reward) {
+                try {
+                    app(\App\Services\RewardService::class)->processRewardCheck($event, $normalizedPhone, $periodKey);
+                    $reward = \App\Models\EventReward::where('event_id', $event->id)
+                        ->where('phone', $normalizedPhone)
+                        ->where('period_key', $periodKey)
+                        ->with(['rule', 'voucher'])
+                        ->first();
+                } catch (\Throwable $e) {
+                    // Non-blocking
+                }
+            }
+
+            if ($reward && $reward->status === 'issued' && $reward->voucher) {
+                $now = Carbon::now();
+                $expiresAt = $reward->expires_at ? Carbon::parse($reward->expires_at) : null;
+                $isExpired = $expiresAt && $now->gt($expiresAt);
+
+                $remainingDays = 0;
+                $remainingTimeLabel = 'Kedaluwarsa';
+                if ($expiresAt && !$isExpired) {
+                    $diff = $now->diff($expiresAt);
+                    $remainingDays = $diff->d + ($diff->h > 0 ? 1 : 0);
+                    $remainingTimeLabel = $diff->d > 0 ? "{$diff->d} hari" : "{$diff->h} jam";
+                }
+
+                $rewardData = [
+                    'id' => $reward->id,
+                    'name' => $reward->rule?->name ?? 'Free Voucher Hotspot',
+                    'status' => $isExpired ? 'expired' : $reward->status,
+                    'voucher_code' => $reward->voucher->code,
+                    'issued_at' => $reward->issued_at?->format('d M Y, H:i'),
+                    'expires_at' => $expiresAt?->format('d M Y, H:i'),
+                    'expires_at_formatted' => $expiresAt?->translatedFormat('d F Y'),
+                    'remaining_days' => $remainingDays,
+                    'remaining_time_label' => $remainingTimeLabel,
+                    'is_expired' => $isExpired,
+                ];
+            } elseif ($reward) {
+                $rewardData = [
+                    'id' => $reward->id,
+                    'name' => $reward->rule?->name ?? 'Free Voucher Hotspot',
+                    'status' => $reward->status,
+                    'voucher_code' => null,
+                    'is_expired' => false,
+                ];
+            }
+        }
+
+        // 10. Return progress data safely (strictly isolated to this phone)
         return response()->json([
             'success' => true,
             'has_active_event' => true,
@@ -161,6 +221,7 @@ class PublicLoyaltyController extends Controller
             'remaining_amount' => $remainingAmount,
             'is_target_achieved' => $isTargetAchieved,
             'status_label' => $isTargetAchieved ? '✓ Target tercapai' : 'Belum mencapai target',
+            'reward' => $rewardData,
         ]);
     }
 }

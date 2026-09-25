@@ -75,6 +75,18 @@ class EventAnalyticsService
 
             foreach ($events as $event) {
                 self::recalculateParticipant($event, $phone, $periodKey);
+                
+                // Phase 2: Automatic Reward Check (total_purchase >= events.target_amount)
+                try {
+                    app(RewardService::class)->processRewardCheck($event, $phone, $periodKey);
+                } catch (\Throwable $re) {
+                    Log::error('EventAnalytics: Automatic reward check failed (non-blocking)', [
+                        'event_id' => $event->id,
+                        'phone' => $phone,
+                        'error' => $re->getMessage(),
+                    ]);
+                }
+
                 self::broadcastUpdate($event, $phone, $periodKey, (float) $transaction->amount);
             }
 

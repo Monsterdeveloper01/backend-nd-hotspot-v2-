@@ -10,6 +10,7 @@ class Voucher extends Model
         'voucher_plan_id',
         'code',
         'customer_phone',
+        'source',
         'price',
         'status',
         'mikrotik_id',
@@ -32,5 +33,10 @@ class Voucher extends Model
     public function transaction()
     {
         return $this->hasOne(Transaction::class, 'voucher_id');
+    }
+
+    public function eventReward()
+    {
+        return $this->hasOne(EventReward::class, 'voucher_id');
     }
 }

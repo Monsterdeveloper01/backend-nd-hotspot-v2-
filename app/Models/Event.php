@@ -35,4 +35,20 @@ class Event extends Model
     {
         return $this->hasMany(EventParticipant::class);
     }
+
+    /**
+     * Get reward rules for this event.
+     */
+    public function rewardRules()
+    {
+        return $this->hasMany(EventRewardRule::class);
+    }
+
+    /**
+     * Get rewards issued under this event.
+     */
+    public function rewards()
+    {
+        return $this->hasMany(EventReward::class);
+    }
 }
