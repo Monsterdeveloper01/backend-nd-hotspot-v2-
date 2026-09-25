@@ -383,6 +383,8 @@ class RewardService
                 "🎫 *Kode Voucher:* `{$voucherCode}`\n" .
                 "⏳ *Masa Berlaku:* 5 Hari (s.d. {$formattedExp})\n\n" .
                 "Silakan gunakan kode voucher di atas saat login ke WiFi hotspot *ND-Hotspot*.\n\n" .
+                "ℹ️ *Bantuan / Kendala Reward:*\n" .
+                "Jika Anda mengalami kendala atau voucher reward belum dapat digunakan, silakan kirim bukti screenshot (SS) bahwa Anda sudah mencapai target ke nomor WhatsApp Admin ini untuk dibantu proses langsung.\n\n" .
                 "Terima kasih atas kepercayaan & loyalitas Anda! 🙏\n\n" .
                 "Salam hangat,\n*ND-Hotspot* 💡";
 
