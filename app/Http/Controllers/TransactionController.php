@@ -8,6 +8,7 @@ use App\Models\VoucherPlan;
 use App\Models\Customer;
 use App\Services\WhatsAppService;
 use App\Services\EventAnalyticsService;
+use App\Services\PointService;
 use App\Services\MikrotikService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Http;
@@ -405,6 +406,17 @@ class TransactionController extends Controller
                 // Customer does NOT know this is happening. No notifications.
                 // Idempotent: recalculates from source transactions, safe for duplicate callbacks.
                 EventAnalyticsService::processTransaction($transaction);
+
+                // ND-Point: Silent Tracking Phase — calculate and credit points
+                // Customer does NOT know points are accumulating. Internal only.
+                try {
+                    PointService::processTransaction($transaction);
+                } catch (\Throwable $pe) {
+                    \Log::error('ND-Point: Payment callback point processing error (non-blocking)', [
+                        'transaction_id' => $transaction->id,
+                        'error' => $pe->getMessage()
+                    ]);
+                }
             }
         } elseif ($request->transaction_status == 'expire' || $request->transaction_status == 'cancel') {
             $transaction->status = 'expired';

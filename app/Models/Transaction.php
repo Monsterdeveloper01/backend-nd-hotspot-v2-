@@ -42,10 +42,11 @@ class Transaction extends Model
                     !empty($transaction->customer_phone)
                 ) {
                     \App\Services\EventAnalyticsService::processTransaction($transaction);
+                    \App\Services\PointService::processTransaction($transaction);
                 }
             } catch (\Throwable $e) {
-                // Non-blocking: analytics should NEVER interrupt transaction flow
-                \Log::warning('EventAnalytics boot hook: ' . $e->getMessage());
+                // Non-blocking: analytics/points should NEVER interrupt transaction flow
+                \Log::warning('EventAnalytics/Point boot hook: ' . $e->getMessage());
             }
         });
     }

@@ -8,6 +8,7 @@ use App\Http\Controllers\Api\CustomerController;
 use App\Http\Controllers\Api\RadiusClientController;
 use App\Http\Controllers\Api\WhatsAppBotController;
 use App\Http\Controllers\Api\EventController;
+use App\Http\Controllers\Api\PointAdminController;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/', function() { return view('welcome'); });
@@ -107,6 +108,18 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/admin/events/{id}/loyalty-test/status', [EventController::class, 'getLoyaltyTestStatus']);
     Route::post('/admin/events/{id}/loyalty-test/run', [EventController::class, 'runLoyaltyTest']);
     Route::post('/admin/events/{id}/loyalty-test/reset', [EventController::class, 'resetLoyaltyTest']);
+
+    // Admin: ND-Point System (Silent Tracking Phase — Internal Analytics & Ledger)
+    Route::get('/admin/points/analytics', [PointAdminController::class, 'analytics']);
+    Route::get('/admin/points/accounts', [PointAdminController::class, 'accounts']);
+    Route::get('/admin/points/accounts/{id}', [PointAdminController::class, 'accountDetail']);
+    Route::get('/admin/points/rules', [PointAdminController::class, 'rules']);
+    Route::post('/admin/points/rules', [PointAdminController::class, 'storeRule']);
+    Route::put('/admin/points/rules/{id}', [PointAdminController::class, 'updateRule']);
+    Route::delete('/admin/points/rules/{id}', [PointAdminController::class, 'deleteRule']);
+    Route::post('/admin/points/adjust', [PointAdminController::class, 'adjustPoints']);
+    Route::post('/admin/points/reconcile', [PointAdminController::class, 'reconcile']);
+    Route::post('/admin/points/toggle-system', [PointAdminController::class, 'toggleSystem']);
 });
 
 // Public: System Config & Tracking
