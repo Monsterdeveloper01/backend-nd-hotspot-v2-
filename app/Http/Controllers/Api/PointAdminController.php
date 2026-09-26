@@ -211,7 +211,8 @@ class PointAdminController extends Controller
     public function reconcile(Request $request): JsonResponse
     {
         $dryRun = $request->boolean('dry_run', true);
-        $result = PointService::reconcileMissing($dryRun);
+        $period = $request->input('period', 'current_month'); // current_month | last_30_days
+        $result = PointService::reconcileMissing($dryRun, $period);
 
         return response()->json([
             'status' => 'success',

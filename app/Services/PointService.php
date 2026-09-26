@@ -302,16 +302,28 @@ class PointService
      * @param bool $dryRun If true, only scans and returns preview without awarding points
      * @return array Reconciliation report
      */
-    public static function reconcileMissing(bool $dryRun = true): array
+    public static function reconcileMissing(bool $dryRun = true, string $period = 'current_month'): array
     {
-        // 1. Fetch real qualifying transactions
-        $transactions = Transaction::where('status', 'success')
+        // 1. Fetch real qualifying transactions strictly within 1 month (not all history)
+        $query = Transaction::where('status', 'success')
             ->where('external_id', 'like', 'ND-%')
             ->whereNotNull('voucher_plan_id')
             ->whereNotNull('customer_phone')
             ->with('plan')
-            ->orderBy('id', 'asc')
-            ->get();
+            ->orderBy('id', 'asc');
+
+        if ($period === 'last_30_days') {
+            $startDate = now()->subDays(30)->startOfDay();
+            $query->where('created_at', '>=', $startDate);
+            $periodLabel = '30 Hari Terakhir (' . $startDate->format('d M Y') . ' s/d Sekarang)';
+        } else {
+            // Default: 1 Bulan Ini (Bulan kalender berjalan: tgl 1 s/d hari ini)
+            $startDate = now()->startOfMonth();
+            $query->where('created_at', '>=', $startDate);
+            $periodLabel = '1 Bulan Ini (' . now()->translatedFormat('F Y') . ')';
+        }
+
+        $transactions = $query->get();
 
         $totalScanned = $transactions->count();
         $alreadyCredited = 0;
@@ -363,6 +375,8 @@ class PointService
         }
 
         return [
+            'period_label' => $periodLabel,
+            'start_date' => $startDate->toIso8601String(),
             'total_scanned' => $totalScanned,
             'already_credited' => $alreadyCredited,
             'missing_count' => $missingCount,
