@@ -189,9 +189,15 @@ class PublicLoyaltyController extends Controller
                 }
             }
 
-            if ($reward && $reward->status === 'issued' && $reward->voucher) {
+            if ($reward && in_array($reward->status, ['issued', 'used']) && $reward->voucher) {
                 $now = Carbon::now();
-                $expiresAt = $reward->expires_at ? Carbon::parse($reward->expires_at) : null;
+                // Jika voucher sudah aktif/digunakan, gunakan expires_at riil dari voucher (durasi penuh paket)
+                // Jika masih berstatus 'issued', gunakan batas klaim 5 hari
+                $targetExp = ($reward->status === 'used' && $reward->voucher->expires_at)
+                    ? $reward->voucher->expires_at
+                    : ($reward->expires_at ? Carbon::parse($reward->expires_at) : null);
+
+                $expiresAt = $targetExp ? Carbon::parse($targetExp) : null;
                 $isExpired = $expiresAt && $now->gt($expiresAt);
 
                 $remainingDays = 0;
@@ -206,7 +212,9 @@ class PublicLoyaltyController extends Controller
                     'id' => $reward->id,
                     'name' => $reward->rule?->name ?? 'Free Voucher Hotspot',
                     'status' => $isExpired ? 'expired' : $reward->status,
+                    'is_used' => $reward->status === 'used',
                     'voucher_code' => $reward->voucher->code,
+                    'plan_duration' => $reward->voucher->plan?->duration ?? null,
                     'issued_at' => $reward->issued_at?->format('d M Y, H:i'),
                     'expires_at' => $expiresAt?->format('d M Y, H:i'),
                     'expires_at_formatted' => $expiresAt?->translatedFormat('d F Y'),

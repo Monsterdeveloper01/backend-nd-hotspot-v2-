@@ -248,7 +248,15 @@ class RadiusServer extends Command
                     $this->logEvent($username, $from, 'Login', 'Fail', "Concurrent limit: $activeOtherCount active on other devices, max $maxSessions");
                     return;
                 }
-            } elseif ($voucher->status === 'available') {
+            } elseif (in_array($voucher->status, ['available', 'sold'])) {
+                // If reward voucher has never been used and its 5-day claim window expired, reject
+                if ($voucher->status === 'sold' && $voucher->source === 'reward' && $voucher->expires_at && Carbon::now()->gt($voucher->expires_at)) {
+                    DB::rollBack();
+                    $this->sendReject($id, $from, $port, $secret, $authenticator, "Reward voucher claim period expired");
+                    $this->logEvent($username, $from, 'Login', 'Fail', "Reward voucher expired before first use: $username");
+                    return;
+                }
+
                 $durationStr = $voucher->plan->duration;
                 $expiresAt = $this->calculateExpiry($durationStr);
                 
@@ -258,6 +266,12 @@ class RadiusServer extends Command
                     'expires_at' => $expiresAt,
                     'mac_address' => $attrs[31] ?? null
                 ]);
+
+                if ($voucher->source === 'reward') {
+                    \App\Models\EventReward::where('voucher_id', $voucher->id)
+                        ->where('status', 'issued')
+                        ->update(['status' => 'used']);
+                }
             } else {
                 DB::rollBack();
                 $this->sendReject($id, $from, $port, $secret, $authenticator, "Voucher not available");

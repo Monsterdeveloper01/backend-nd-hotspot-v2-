@@ -195,7 +195,7 @@ class RewardService
                     'password' => '',
                     'profile' => $profileName,
                     'comment' => 'Reward: ' . substr($rule->name, 0, 25) . ' Exp:' . $expiresAt->format('d/m/Y'),
-                    'limit_uptime' => '5d', // 5-day uptime expiration in MikroTik
+                    'limit_uptime' => $plan->duration ?: '0', // Full plan duration (e.g. 7d, 1d, 3h), not cut off by claim window
                 ]);
 
                 Log::info('RewardService: MikroTik API Response', ['result' => $mikrotikResult]);
@@ -376,12 +376,15 @@ class RewardService
         try {
             $formattedExp = $expiresAt->translatedFormat('d F Y, H:i') . ' WIB';
 
+            $planDuration = $rule->voucherPlan?->duration ? " (Durasi: {$rule->voucherPlan->duration})" : '';
+
             $message = "🎉 *SELAMAT! TARGET TERCAPAI* 🎉\n\n" .
                 "Halo Pelanggan Setia *ND-Hotspot*! 💡\n" .
                 "Total pembelian voucher Anda telah mencapai target program bulanan kami.\n\n" .
-                "🎁 *Reward Anda:* {$rule->name}\n" .
+                "🎁 *Reward Anda:* {$rule->name}{$planDuration}\n" .
                 "🎫 *Kode Voucher:* `{$voucherCode}`\n" .
-                "⏳ *Masa Berlaku:* 5 Hari (s.d. {$formattedExp})\n\n" .
+                "⏳ *Batas Waktu Klaim/Mulai Pakai:* 5 Hari (s.d. {$formattedExp})\n" .
+                "📌 _Catatan: Durasi paket internet akan berjalan penuh sesuai paket begitu kode voucher pertama kali Anda login-kan._\n\n" .
                 "Silakan gunakan kode voucher di atas saat login ke WiFi hotspot *ND-Hotspot*.\n\n" .
                 "ℹ️ *Bantuan / Kendala Reward:*\n" .
                 "Jika Anda mengalami kendala atau voucher reward belum dapat digunakan, silakan kirim bukti screenshot (SS) bahwa Anda sudah mencapai target ke nomor WhatsApp Admin ini untuk dibantu proses langsung.\n\n" .
@@ -577,7 +580,7 @@ class RewardService
             $mikrotikMode = 'real_mikrotik';
             try {
                 $profileName = $plan ? ($plan->mikrotik_profile ?: $plan->name) : 'default';
-                $limitUptime = $expiryMinutes ? "{$expiryMinutes}m" : '5d';
+                $limitUptime = $expiryMinutes ? "{$expiryMinutes}m" : ($plan ? ($plan->duration ?: '0') : '0');
 
                 $mikrotikResult = $this->mikrotik->createUser([
                     'username' => $voucherCode,

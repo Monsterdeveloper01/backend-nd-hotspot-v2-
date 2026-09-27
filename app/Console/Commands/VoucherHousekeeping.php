@@ -65,6 +65,13 @@ class VoucherHousekeeping extends Command
                         'expires_at' => $expiresAt,
                         'mac_address' => $mUser['mac-address'] ?? null
                     ]);
+
+                    if ($voucher->source === 'reward') {
+                        \App\Models\EventReward::where('voucher_id', $voucher->id)
+                            ->where('status', 'issued')
+                            ->update(['status' => 'used']);
+                    }
+
                     $this->info("Voucher {$code} terdeteksi mulai digunakan. Exp: {$expiresAt}");
                 }
             }
@@ -84,6 +91,11 @@ class VoucherHousekeeping extends Command
                     // Update status di DB jika belum 'expired'
                     if ($voucher->status !== 'expired') {
                         $voucher->update(['status' => 'expired']);
+                        if ($voucher->source === 'reward') {
+                            \App\Models\EventReward::where('voucher_id', $voucher->id)
+                                ->whereIn('status', ['issued', 'processing'])
+                                ->update(['status' => 'expired']);
+                        }
                     }
                     $this->info("Voucher {$code} berhasil dibersihkan.");
                 } catch (\Exception $e) {
