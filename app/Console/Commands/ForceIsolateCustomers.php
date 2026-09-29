@@ -39,37 +39,43 @@ class ForceIsolateCustomers extends Command
 
         $this->info("Found {$toIsolate->count()} customers to isolate.");
 
-        foreach ($toIsolate as $customer) {
-            $this->info("Isolating: {$customer->name} (Due: {$customer->due_date->format('d/m/Y')})");
-            
-            try {
-                // 1. Mikrotik Isolation
-                $this->mikrotik->setUserStatus($customer->name, false);
-                $this->mikrotik->clearUserActiveSessions($customer->name);
-                $this->mikrotik->clearUserCookies($customer->name);
-
-                // 2. DB Status Update
-                $customer->is_isolated = true;
-                $customer->save();
-
-                // 3. Optional Notification
-                if ($this->option('notify')) {
-                    $msg = "🚫 *LAYANAN TERISOLIR OTOMATIS*\n\n" .
-                           "Halo *{$customer->name}*,\n" .
-                           "Layanan internet Anda telah *DINONAKTIFKAN* karena telah melewati batas jatuh tempo (" . $customer->due_date->format('d/m/Y') . ").\n\n" .
-                           "💰 *Total Tagihan:* Rp " . number_format($customer->billing_amount, 0, ',', '.') . "\n\n" .
-                           "Segera lakukan pembayaran untuk mengaktifkan kembali layanan Anda:\n" .
-                           "👉 " . env('FRONTEND_URL', 'https://nd-hotpot.net') . "/payment\n\n" .
-                           "Hormat kami,\n" .
-                           "*ND-Hotspot* 💡";
-                    
-                    $this->whatsapp->sendMessage($customer->whatsapp, $msg);
-                }
+        // Single connection for all MikroTik operations
+        $this->mikrotik->beginBatch();
+        try {
+            foreach ($toIsolate as $customer) {
+                $this->info("Isolating: {$customer->name} (Due: {$customer->due_date->format('d/m/Y')})");
                 
-                $this->info("Success: {$customer->name} isolated.");
-            } catch (\Exception $e) {
-                $this->error("Error isolating {$customer->name}: " . $e->getMessage());
+                try {
+                    // 1. Mikrotik Isolation (reuses the single batch connection)
+                    $this->mikrotik->setUserStatus($customer->name, false);
+                    $this->mikrotik->clearUserActiveSessions($customer->name);
+                    $this->mikrotik->clearUserCookies($customer->name);
+
+                    // 2. DB Status Update
+                    $customer->is_isolated = true;
+                    $customer->save();
+
+                    // 3. Optional Notification
+                    if ($this->option('notify')) {
+                        $msg = "🚫 *LAYANAN TERISOLIR OTOMATIS*\n\n" .
+                               "Halo *{$customer->name}*,\n" .
+                               "Layanan internet Anda telah *DINONAKTIFKAN* karena telah melewati batas jatuh tempo (" . $customer->due_date->format('d/m/Y') . ").\n\n" .
+                               "💰 *Total Tagihan:* Rp " . number_format($customer->billing_amount, 0, ',', '.') . "\n\n" .
+                               "Segera lakukan pembayaran untuk mengaktifkan kembali layanan Anda:\n" .
+                               "👉 " . env('FRONTEND_URL', 'https://nd-hotpot.net') . "/payment\n\n" .
+                               "Hormat kami,\n" .
+                               "*ND-Hotspot* 💡";
+                        
+                        $this->whatsapp->sendMessage($customer->whatsapp, $msg);
+                    }
+                    
+                    $this->info("Success: {$customer->name} isolated.");
+                } catch (\Exception $e) {
+                    $this->error("Error isolating {$customer->name}: " . $e->getMessage());
+                }
             }
+        } finally {
+            $this->mikrotik->endBatch();
         }
 
         $this->info('Force isolation process completed.');

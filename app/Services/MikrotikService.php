@@ -12,6 +12,12 @@ class MikrotikService
     protected $client;
     protected $config;
 
+    /**
+     * When true, disconnect() is a no-op so one connection is reused
+     * across multiple method calls. Call endBatch() to really disconnect.
+     */
+    protected bool $batchMode = false;
+
     public function __construct()
     {
         $this->config = [
@@ -81,10 +87,47 @@ class MikrotikService
 
     public function disconnect()
     {
+        // In batch mode, skip disconnect so the connection is reused
+        if ($this->batchMode) return;
+
+        $this->forceDisconnect();
+    }
+
+    /**
+     * Always disconnect, regardless of batch mode.
+     */
+    protected function forceDisconnect()
+    {
         if ($this->client) {
-            $this->client->disconnect();
+            try {
+                $this->client->disconnect();
+            } catch (\Throwable $e) {
+                // Ignore disconnect errors
+            }
             $this->client = null;
         }
+    }
+
+    /**
+     * Begin batch mode: all methods will reuse a single API connection.
+     * Call endBatch() when done to release the connection.
+     */
+    public function beginBatch(): bool
+    {
+        if (!$this->connect()) {
+            return false;
+        }
+        $this->batchMode = true;
+        return true;
+    }
+
+    /**
+     * End batch mode and close the shared connection.
+     */
+    public function endBatch(): void
+    {
+        $this->batchMode = false;
+        $this->forceDisconnect();
     }
 
     public function getAllHotspotUsers()
@@ -328,6 +371,72 @@ public function setUserStatus($username, $enabled)
                 }
             }
         }
+        $this->disconnect();
+        return true;
+    }
+
+    /**
+     * Remove a hotspot user AND clear sessions + cookies in ONE connection.
+     * Replaces the pattern: removeHotspotUser() + clearUserActiveSessions() + clearUserCookies()
+     * which previously opened 3 separate API connections per voucher.
+     */
+    public function removeAndCleanUser(string $username): bool
+    {
+        if (!$this->connect()) return false;
+
+        $username = trim($username);
+
+        // 1. Remove hotspot user
+        $users = $this->client->comm('/ip/hotspot/user/print', ['?name' => $username]);
+        if (empty($users) || !is_array($users) || !isset($users[0])) {
+            $allUsers = $this->client->comm('/ip/hotspot/user/print');
+            $searchName = strtolower($username);
+            $users = [];
+            if (is_array($allUsers)) {
+                foreach ($allUsers as $u) {
+                    if (strtolower(trim($u['name'] ?? '')) === $searchName) {
+                        $users = [$u];
+                        break;
+                    }
+                }
+            }
+        }
+        foreach ($users as $u) {
+            if (isset($u['.id'])) {
+                $this->client->comm('/ip/hotspot/user/remove', ['.id' => $u['.id']]);
+            }
+        }
+
+        // 2. Kick active sessions
+        $active = $this->client->comm('/ip/hotspot/active/print', ['?user' => $username]);
+        if (empty($active) || !is_array($active)) {
+            $allActive = $this->client->comm('/ip/hotspot/active/print');
+            $searchName = strtolower(trim($username));
+            $active = [];
+            if (is_array($allActive)) {
+                foreach ($allActive as $a) {
+                    if (strtolower(trim($a['user'] ?? '')) === $searchName) {
+                        $active[] = $a;
+                    }
+                }
+            }
+        }
+        foreach ($active as $a) {
+            if (isset($a['.id'])) {
+                $this->client->comm('/ip/hotspot/active/remove', ['.id' => $a['.id']]);
+            }
+        }
+
+        // 3. Clear cookies
+        $cookies = $this->client->comm('/ip/hotspot/cookie/print', ['?user' => $username]);
+        if (is_array($cookies)) {
+            foreach ($cookies as $c) {
+                if (isset($c['.id'])) {
+                    $this->client->comm('/ip/hotspot/cookie/remove', ['.id' => $c['.id']]);
+                }
+            }
+        }
+
         $this->disconnect();
         return true;
     }

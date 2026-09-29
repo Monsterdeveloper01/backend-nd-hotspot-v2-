@@ -319,16 +319,22 @@ class VoucherController extends Controller
             ->limit(10)
             ->get();
 
-        foreach ($expired as $v) {
-            try {
-                $this->mikrotik->removeHotspotUser($v->code);
-                $this->mikrotik->clearUserActiveSessions($v->code);
-                $this->mikrotik->clearUserCookies($v->code);
-            } catch (\Exception $e) {
-                \Log::error("Cleanup failed for {$v->code}: " . $e->getMessage());
-            }
+        if ($expired->isEmpty()) return;
 
-            $v->update(['status' => 'expired']);
+        // Single connection for all cleanup operations
+        $this->mikrotik->beginBatch();
+        try {
+            foreach ($expired as $v) {
+                try {
+                    $this->mikrotik->removeAndCleanUser($v->code);
+                } catch (\Exception $e) {
+                    \Log::error("Cleanup failed for {$v->code}: " . $e->getMessage());
+                }
+
+                $v->update(['status' => 'expired']);
+            }
+        } finally {
+            $this->mikrotik->endBatch();
         }
     }
 
