@@ -126,13 +126,12 @@ class CustomerController extends Controller
         // Toggle the current isolation status
         $newStatus = !$customer->is_isolated;
         
-        // Re-enable in Mikrotik if isolated
+        // Sync with Mikrotik: if isolated ($newStatus = true), enabled should be false
         $mikrotikSynced = false;
         try {
-            $mikrotikSynced = $this->mikrotik->setUserStatus($customer->name, true);
+            $mikrotikSynced = $this->mikrotik->setUserStatus($customer->name, !$newStatus);
         } catch (\Throwable $e) {
-            // \Throwable digunakan untuk menangkap masalah struktural PHP (seperti TypeError) yang luput dari \Exception
-            \Log::error("Manual Pay: Mikrotik sync failed for {$customer->name}. Info: " . $e->getMessage() . " pada baris " . $e->getLine());
+            \Log::error("Toggle Status: Mikrotik sync failed for {$customer->name}. Info: " . $e->getMessage() . " pada baris " . $e->getLine());
         }
 
         $customer->is_isolated = $newStatus;

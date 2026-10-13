@@ -84,11 +84,12 @@ class CheckCustomerBilling extends Command
         foreach ($toIsolate as $customer) {
             Log::info("Queueing ISOLASI for: {$customer->name}");
             
-            // Dispatch Mikrotik Isolation Job
+            // Dispatch job yang menangani secara berurutan:
+            // 1. Disable user di MikroTik
+            // 2. Clear sessions & cookies
+            // 3. Update DB is_isolated = true (HANYA setelah MikroTik sukses)
+            // 4. Kirim notifikasi WA (HANYA setelah MikroTik sukses)
             IsolateCustomerJob::dispatch($customer);
-
-            // Dispatch WhatsApp Notification for Isolation
-            $this->dispatchWhatsAppIsolation($customer);
         }
 
         // 5. Telegram Report

@@ -6,7 +6,7 @@ use Illuminate\Support\Facades\Log;
 
 class MikrotikService
 {
-    const CONNECT_TIMEOUT = 5;
+    const CONNECT_TIMEOUT = 8;
     const READ_TIMEOUT = 8;
 
     protected $client;
@@ -21,24 +21,41 @@ class MikrotikService
     public function __construct()
     {
         $this->config = [
-            'host'     => env('MIKROTIK_HOST', '101.255.208.150'),
-            'user'     => env('MIKROTIK_USERNAME', 'admin'),
-            'pass'     => env('MIKROTIK_PASSWORD', 'karambia1686'),
-            'port'     => (int) env('MIKROTIK_PORT', 8728),
-            'timeout'  => self::CONNECT_TIMEOUT,
+            'host'          => env('MIKROTIK_HOST', '101.255.208.150'),
+            'fallback_host' => env('MIKROTIK_FALLBACK_HOST'),
+            'user'          => env('MIKROTIK_USERNAME', 'admin'),
+            'pass'          => env('MIKROTIK_PASSWORD', 'karambia1686'),
+            'port'          => (int) env('MIKROTIK_PORT', 8728),
+            'timeout'       => self::CONNECT_TIMEOUT,
         ];
     }
 
     public function connect()
     {
         if (!$this->client) {
-            $this->client = new RouterosAPI();
-            $this->client->timeout = $this->config['timeout'];
-            if (!$this->client->connect($this->config['host'], $this->config['user'], $this->config['pass'], $this->config['port'])) {
-                Log::error("Gagal terhubung ke MikroTik: " . $this->config['host']);
-                $this->client = null;
-                return false;
+            $hosts = array_values(array_filter([
+                $this->config['host'],
+                $this->config['fallback_host'],
+            ]));
+
+            foreach ($hosts as $host) {
+                // Try up to 2 times for transient connection hiccups
+                for ($attempt = 1; $attempt <= 2; $attempt++) {
+                    $client = new RouterosAPI();
+                    $client->timeout = $this->config['timeout'];
+                    if ($client->connect($host, $this->config['user'], $this->config['pass'], $this->config['port'])) {
+                        $this->client = $client;
+                        return true;
+                    }
+                    if ($attempt < 2) {
+                        usleep(500000); // 500ms
+                    }
+                }
             }
+
+            Log::error("Gagal terhubung ke MikroTik: " . implode(', ', $hosts));
+            $this->client = null;
+            return false;
         }
         return true;
     }
@@ -146,7 +163,7 @@ class MikrotikService
         return is_array($active) ? $active : [];
     }
 
-public function setUserStatus($username, $enabled)
+    public function setUserStatus($username, $enabled)
     {
         if (!$this->connect()) {
             Log::error("Mikrotik: Gagal koneksi saat mencoba " . ($enabled ? "enable" : "disable") . " user {$username}");
@@ -154,21 +171,27 @@ public function setUserStatus($username, $enabled)
         }
 
         $username = trim($username);
+        $searchName = strtolower($username);
         Log::info("Mikrotik: Mengubah status user {$username} ke " . ($enabled ? "ENABLED" : "DISABLED"));
 
-        // 1. Coba cari langsung ke MikroTik
+        $targetUser = null;
+
+        // 1. Coba cari dengan query filter ke MikroTik
         $users = $this->client->comm('/ip/hotspot/user/print', [
             '?name' => $username
         ]);
 
-        // Cek apakah MikroTik mengembalikan error (!trap) dari pencarian pertama
-        if (isset($users['message'])) {
-            Log::warning("Mikrotik API Error (Pencarian 1): " . $users['message']);
-            $users = []; // Kosongkan agar bisa pindah ke pencarian manual
+        if (is_array($users) && !isset($users['message'])) {
+            foreach ($users as $u) {
+                if (strtolower(trim($u['name'] ?? '')) === $searchName) {
+                    $targetUser = $u;
+                    break;
+                }
+            }
         }
 
-        // 2. Jika tidak ketemu (kosong atau error), cari secara menyeluruh (manual)
-        if (empty($users) || !isset($users[0])) {
+        // 2. Jika tidak ketemu dari query langsung, cari secara menyeluruh di semua user (case-insensitive & trimmed)
+        if (!$targetUser) {
             $allUsers = $this->client->comm('/ip/hotspot/user/print');
             
             if (isset($allUsers['message'])) {
@@ -177,35 +200,31 @@ public function setUserStatus($username, $enabled)
                 return false;
             }
 
-            $searchName = strtolower($username);
-            $users = [];
-            
-            // Perulangan untuk mencocokkan nama dengan aman
             if (is_array($allUsers)) {
                 foreach ($allUsers as $u) {
                     if (strtolower(trim($u['name'] ?? '')) === $searchName) {
-                        $users = [$u];
+                        $targetUser = $u;
                         break;
                     }
                 }
             }
         }
 
-        // Validasi final sebelum mengambil ID
-        if (empty($users) || !isset($users[0])) {
+        // Validasi final: JANGAN pernah ambil user sembarangan jika tidak ada yang cocok!
+        if (!$targetUser) {
             Log::warning("Mikrotik: User '{$username}' tidak ditemukan di router saat ingin di-" . ($enabled ? "enable" : "disable"));
             $this->disconnect();
             return false;
         }
 
-        $id = $users[0]['.id'] ?? $users[0]['id'] ?? null;
+        $id = $targetUser['.id'] ?? $targetUser['id'] ?? null;
         if (!$id) {
-            Log::error("Mikrotik: ID user {$username} tidak valid atau tidak ditemukan dalam struktur data API.", ['data' => $users[0]]);
+            Log::error("Mikrotik: ID user {$username} tidak valid atau tidak ditemukan dalam struktur data API.", ['data' => $targetUser]);
             $this->disconnect();
             return false;
         }
 
-        // 3. Eksekusi perubahan status
+        // 3. Eksekusi perubahan status pada user yang tepat
         $response = $this->client->comm('/ip/hotspot/user/set', [
             '.id' => $id,
             'disabled' => $enabled ? 'no' : 'yes'
@@ -220,7 +239,7 @@ public function setUserStatus($username, $enabled)
 
         Log::info("Mikrotik: Proses set status untuk {$username} (ID: {$id}) berhasil.");
 
-        // Putus koneksi sebelum menjalankan fungsi lain untuk menghindari tabrakan socket
+        // Putus koneksi sebelum fungsi lain jika bukan batch mode
         $this->disconnect();
 
         // 4. Bersihkan Sesi Aktif & Cookies
@@ -246,23 +265,37 @@ public function setUserStatus($username, $enabled)
     {
         if (!$this->connect()) return false;
         
-        // 1. Coba cari langsung
+        $username = trim($username);
+        $searchName = strtolower($username);
+
+        // 1. Coba cari dengan ?user (properti aktif di hotspot adalah 'user', bukan 'name')
         $active = $this->client->comm('/ip/hotspot/active/print', [
-            '?name' => $username
+            '?user' => $username
         ]);
 
-        // 2. Jika tidak ketemu, cari manual (case-insensitive)
-        if (empty($active)) {
-            $allActive = $this->client->comm('/ip/hotspot/active/print');
-            $searchName = strtolower(trim($username));
-            foreach ($allActive as $a) {
+        $targets = [];
+        if (is_array($active) && !isset($active['message'])) {
+            foreach ($active as $a) {
                 if (strtolower(trim($a['user'] ?? '')) === $searchName) {
-                    $active[] = $a;
+                    $targets[] = $a;
                 }
             }
         }
 
-        foreach ($active as $a) {
+        // 2. Jika tidak ketemu, cari manual di semua sesi aktif
+        if (empty($targets)) {
+            $allActive = $this->client->comm('/ip/hotspot/active/print');
+            if (is_array($allActive) && !isset($allActive['message'])) {
+                foreach ($allActive as $a) {
+                    if (strtolower(trim($a['user'] ?? '')) === $searchName) {
+                        $targets[] = $a;
+                    }
+                }
+            }
+        }
+
+        // HANYA hapus sesi yang benar-benar milik user ini
+        foreach ($targets as $a) {
             if (isset($a['.id'])) {
                 $this->client->comm('/ip/hotspot/active/remove', [
                     '.id' => $a['.id']
@@ -359,16 +392,40 @@ public function setUserStatus($username, $enabled)
     public function clearUserCookies($username)
     {
         if (!$this->connect()) return false;
+        
+        $username = trim($username);
+        $searchName = strtolower($username);
+
         $cookies = $this->client->comm('/ip/hotspot/cookie/print', [
             '?user' => $username
         ]);
-        if (is_array($cookies)) {
+
+        $targets = [];
+        if (is_array($cookies) && !isset($cookies['message'])) {
             foreach ($cookies as $c) {
-                if (isset($c['.id'])) {
-                    $this->client->comm('/ip/hotspot/cookie/remove', [
-                        '.id' => $c['.id']
-                    ]);
+                if (strtolower(trim($c['user'] ?? '')) === $searchName) {
+                    $targets[] = $c;
                 }
+            }
+        }
+
+        if (empty($targets)) {
+            $allCookies = $this->client->comm('/ip/hotspot/cookie/print');
+            if (is_array($allCookies) && !isset($allCookies['message'])) {
+                foreach ($allCookies as $c) {
+                    if (strtolower(trim($c['user'] ?? '')) === $searchName) {
+                        $targets[] = $c;
+                    }
+                }
+            }
+        }
+
+        // HANYA hapus cookie yang benar-benar milik user ini
+        foreach ($targets as $c) {
+            if (isset($c['.id'])) {
+                $this->client->comm('/ip/hotspot/cookie/remove', [
+                    '.id' => $c['.id']
+                ]);
             }
         }
         $this->disconnect();
@@ -569,7 +626,23 @@ class RouterosAPI
         $this->write($com, false);
 
         foreach ($args as $key => $value) {
-            $this->write('=' . $key . '=' . $value, false);
+            if (is_int($key)) {
+                $word = (string)$value;
+                if ($word !== '' && $word[0] !== '=' && $word[0] !== '?' && $word[0] !== '~') {
+                    $word = '=' . $word;
+                }
+                $this->write($word, false);
+            } else {
+                $firstChar = $key[0] ?? '';
+                if ($firstChar === '?' || $firstChar === '~') {
+                    // Query word (?name=foo) or API attribute (~proplist=...)
+                    $this->write($key . '=' . $value, false);
+                } elseif ($firstChar === '=') {
+                    $this->write($key . '=' . $value, false);
+                } else {
+                    $this->write('=' . $key . '=' . $value, false);
+                }
+            }
         }
 
         // Kirim terminator untuk menandakan end of command

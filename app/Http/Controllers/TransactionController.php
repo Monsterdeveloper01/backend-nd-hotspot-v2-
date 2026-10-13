@@ -25,6 +25,9 @@ class TransactionController extends Controller
     protected $mikrotik;
     protected $telegram;
 
+
+
+    
     public function __construct(WhatsAppService $wa, MikrotikService $mikrotik, \App\Services\TelegramService $telegram)
     {
         $this->wa = $wa;

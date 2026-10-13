@@ -47,15 +47,20 @@ class ForceIsolateCustomers extends Command
                 
                 try {
                     // 1. Mikrotik Isolation (reuses the single batch connection)
-                    $this->mikrotik->setUserStatus($customer->name, false);
+                    $disabled = $this->mikrotik->setUserStatus($customer->name, false);
+                    if (!$disabled) {
+                        $this->error("Gagal mendisable {$customer->name} di MikroTik. Status isolir dan WA dibatalkan.");
+                        continue;
+                    }
+
                     $this->mikrotik->clearUserActiveSessions($customer->name);
                     $this->mikrotik->clearUserCookies($customer->name);
 
-                    // 2. DB Status Update
+                    // 2. DB Status Update (HANYA jika MikroTik sukses)
                     $customer->is_isolated = true;
                     $customer->save();
 
-                    // 3. Optional Notification
+                    // 3. Optional Notification (HANYA jika MikroTik sukses)
                     if ($this->option('notify')) {
                         $msg = "🚫 *LAYANAN TERISOLIR OTOMATIS*\n\n" .
                                "Halo *{$customer->name}*,\n" .
