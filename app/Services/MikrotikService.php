@@ -225,10 +225,24 @@ class MikrotikService
         }
 
         // 3. Eksekusi perubahan status pada user yang tepat
-        $response = $this->client->comm('/ip/hotspot/user/set', [
-            '.id' => $id,
-            'disabled' => $enabled ? 'no' : 'yes'
-        ]);
+        // Menggunakan /disable & /enable bawaan RouterOS + /set untuk kompatibilitas penuh (v6 & v7)
+        if ($enabled) {
+            $this->client->comm('/ip/hotspot/user/enable', [
+                '.id' => $id
+            ]);
+            $response = $this->client->comm('/ip/hotspot/user/set', [
+                '.id' => $id,
+                'disabled' => 'no'
+            ]);
+        } else {
+            $this->client->comm('/ip/hotspot/user/disable', [
+                '.id' => $id
+            ]);
+            $response = $this->client->comm('/ip/hotspot/user/set', [
+                '.id' => $id,
+                'disabled' => 'yes'
+            ]);
+        }
 
         // Cek apakah perintah pengubahan status ditolak router
         if (isset($response['type']) && $response['type'] === '!trap') {
@@ -534,6 +548,53 @@ class MikrotikService
             'comment' => $user['comment'] ?? '',
             'is_online' => !empty($active),
             'active_data' => !empty($active) ? $active[0] : null
+        ];
+    }
+
+    public function getUserStatus($username)
+    {
+        if (!$this->connect()) {
+            return ['exists' => false, 'enabled' => false];
+        }
+
+        $searchName = strtolower(trim($username));
+        $users = $this->client->comm('/ip/hotspot/user/print', [
+            '?name' => $username
+        ]);
+
+        $target = null;
+        if (is_array($users) && !isset($users['message'])) {
+            foreach ($users as $u) {
+                if (strtolower(trim($u['name'] ?? '')) === $searchName) {
+                    $target = $u;
+                    break;
+                }
+            }
+        }
+
+        if (!$target) {
+            $allUsers = $this->client->comm('/ip/hotspot/user/print');
+            if (is_array($allUsers) && !isset($allUsers['message'])) {
+                foreach ($allUsers as $u) {
+                    if (strtolower(trim($u['name'] ?? '')) === $searchName) {
+                        $target = $u;
+                        break;
+                    }
+                }
+            }
+        }
+
+        $this->disconnect();
+
+        if (!$target) {
+            return ['exists' => false, 'enabled' => false];
+        }
+
+        $isDisabled = ($target['disabled'] === 'true' || $target['disabled'] === 'yes');
+        return [
+            'exists' => true,
+            'enabled' => !$isDisabled,
+            'user' => $target
         ];
     }
 }

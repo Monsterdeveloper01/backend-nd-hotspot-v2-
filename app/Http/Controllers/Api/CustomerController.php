@@ -123,15 +123,38 @@ class CustomerController extends Controller
     {
         $customer = Customer::findOrFail($id);
         
-        // Toggle the current isolation status
-        $newStatus = !$customer->is_isolated;
+        // Cek status riil di router MikroTik
+        $routerStatus = $this->mikrotik->getUserStatus($customer->name);
         
-        // Sync with Mikrotik: if isolated ($newStatus = true), enabled should be false
+        // Logika Cerdas Desinkronisasi:
+        // Jika di DB sudah terisolir TAPI di MikroTik akunnya masih aktif (belum disable),
+        // maka aksi tombol ini adalah MEMAKSA DISABLE di MikroTik agar sinkron!
+        if ($customer->is_isolated && $routerStatus['exists'] && $routerStatus['enabled']) {
+            $newStatus = true; // Tetap terisolir
+            $targetEnabledInRouter = false; // Paksa disable di router
+            $actionLabel = 'ISOLIR (DISABLE MIKROTIK)';
+        } else {
+            // Normal toggle
+            $newStatus = !$customer->is_isolated;
+            $targetEnabledInRouter = !$newStatus;
+            $actionLabel = $newStatus ? 'ISOLIR' : 'AKTIFKAN';
+        }
+        
         $mikrotikSynced = false;
         try {
-            $mikrotikSynced = $this->mikrotik->setUserStatus($customer->name, !$newStatus);
+            $mikrotikSynced = $this->mikrotik->setUserStatus($customer->name, $targetEnabledInRouter);
         } catch (\Throwable $e) {
             \Log::error("Toggle Status: Mikrotik sync failed for {$customer->name}. Info: " . $e->getMessage() . " pada baris " . $e->getLine());
+        }
+
+        // HANYA simpan ke database jika MikroTik benar-benar berhasil!
+        if (!$mikrotikSynced) {
+            return response()->json([
+                'success' => false,
+                'mikrotik_synced' => false,
+                'is_isolated' => $customer->is_isolated,
+                'message' => "GAGAL {$actionLabel} di MikroTik! Pastikan router online dan user '{$customer->name}' terdaftar di MikroTik."
+            ], 422);
         }
 
         $customer->is_isolated = $newStatus;
@@ -139,11 +162,11 @@ class CustomerController extends Controller
 
         return response()->json([
             'success' => true,
-            'mikrotik_synced' => $mikrotikSynced,
+            'mikrotik_synced' => true,
             'is_isolated' => $customer->is_isolated,
-            'message' => $mikrotikSynced 
-                ? 'Status berhasil diperbarui dan sinkron ke MikroTik.' 
-                : 'Status diperbarui di database, tapi GAGAL sinkron ke MikroTik.'
+            'message' => $newStatus 
+                ? "Pelanggan {$customer->name} BERHASIL diisolir dan dinonaktifkan di MikroTik." 
+                : "Pelanggan {$customer->name} BERHASIL diaktifkan kembali di MikroTik."
         ]);
     }
 
