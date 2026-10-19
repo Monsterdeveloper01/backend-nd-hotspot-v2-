@@ -46,7 +46,30 @@ class CustomerController extends Controller
                   ->where('status_bayar', '!=', 'paid');
         }
 
-        $customers = $query->latest()->paginate(10);
+        // Sorting: default dari tanggal 1 (1 - 31) dan sesuai alfabet (A - Z)
+        $sort = $request->input('sort', 'date_alphabet');
+        switch ($sort) {
+            case 'alphabet_asc':
+                $query->orderBy('name', 'asc');
+                break;
+            case 'alphabet_desc':
+                $query->orderBy('name', 'desc');
+                break;
+            case 'date_asc':
+                $query->orderBy('due_date', 'asc')->orderBy('name', 'asc');
+                break;
+            case 'latest':
+                $query->latest();
+                break;
+            case 'date_alphabet':
+            default:
+                // Urut dari tanggal 1 s/d 31, lalu nama pelanggan sesuai alfabet A - Z
+                $query->orderByRaw('CASE WHEN due_date IS NULL THEN 1 ELSE 0 END, DAY(due_date) ASC')->orderBy('name', 'asc');
+                break;
+        }
+
+        $perPage = (int) $request->input('per_page', 10);
+        $customers = $query->paginate($perPage);
         
         // Optimize: Fetch all Mikrotik users ONCE instead of in a loop
         $isMikrotikAlive = $this->mikrotik->connect();
