@@ -41,6 +41,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/voucher-logs', [VoucherController::class, 'getLogs']);
     Route::post('/vouchers/generate', [VoucherController::class, 'generate']);
     Route::post('/vouchers/{code}/kick', [VoucherController::class, 'kickUser']);
+    Route::post('/vouchers/sync-mikrotik', [VoucherController::class, 'syncToMikrotik']);
     Route::delete('/vouchers/{id}', [VoucherController::class, 'destroy']);
 
     // Admin: RADIUS Management

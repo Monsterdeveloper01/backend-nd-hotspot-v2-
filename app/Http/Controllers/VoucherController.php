@@ -343,4 +343,21 @@ class VoucherController extends Controller
         $this->mikrotik->clearUserActiveSessions($code);
         return response()->json(['message' => "User $code kicked"]);
     }
+
+    public function syncToMikrotik(Request $request, \App\Services\VoucherSyncService $syncService)
+    {
+        $dryRun = $request->boolean('dry_run', false);
+        $onlyRewards = $request->boolean('only_rewards', false);
+        $includeStock = $request->boolean('include_stock', true);
+        $forceUpdate = $request->boolean('force_update', false);
+
+        $result = $syncService->sync([
+            'dry_run' => $dryRun,
+            'only_rewards' => $onlyRewards,
+            'include_stock' => $includeStock,
+            'force_update' => $forceUpdate,
+        ]);
+
+        return response()->json($result);
+    }
 }
