@@ -64,7 +64,8 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/admin/incidents/{id}/retry', [\App\Http\Controllers\Api\IncidentController::class, 'retry']);
     Route::delete('/admin/incidents/{id}', [\App\Http\Controllers\Api\IncidentController::class, 'destroy']);
 
-    // Admin: Dashboard Stats    Route::get('/dashboard/stats', [\App\Http\Controllers\Api\DashboardController::class, 'index']);
+    // Admin: Dashboard Stats
+    Route::get('/dashboard/stats', [\App\Http\Controllers\Api\DashboardController::class, 'index']);
     Route::get('/dashboard/transactions', [\App\Http\Controllers\Api\DashboardController::class, 'transactions']);
     Route::post('/dashboard/refresh-mikrotik', [\App\Http\Controllers\Api\DashboardController::class, 'refreshMikrotik']);
 
