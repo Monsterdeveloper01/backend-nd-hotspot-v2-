@@ -9,6 +9,7 @@ use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use App\Services\MikrotikService;
 use App\Services\WhatsAppService;
+use App\Services\IncidentLoggerService;
 use App\Models\Customer;
 use Illuminate\Support\Facades\Log;
 
@@ -71,17 +72,32 @@ class IsolateCustomerJob implements ShouldQueue
                        "Hormat kami,\n" .
                        "*ND-Hotspot* 💡";
 
-                $whatsapp->sendMessage($this->customer->whatsapp, $msg);
+                $whatsapp->sendMessage($this->customer->whatsapp, $msg, 'Isolasi Pelanggan');
                 Log::info("ISOLASI JOB: WhatsApp isolation notice sent to {$customerName}.");
             } catch (\Throwable $e) {
                 // WA failure is non-blocking — MikroTik isolation already succeeded
                 Log::warning("ISOLASI JOB: WhatsApp failed for {$customerName} (non-blocking): " . $e->getMessage());
+                IncidentLoggerService::logWhatsAppFailure($this->customer->whatsapp, $msg ?? '', $e->getMessage(), 'Isolasi Pelanggan');
             }
 
             Log::info("ISOLASI JOB: {$customerName} fully isolated (MikroTik + WA).");
 
         } catch (\Exception $e) {
             Log::error("ISOLASI JOB ERROR: Gagal mengisolasi {$customerName}: " . $e->getMessage());
+
+            // Log incident to dashboard for admin
+            IncidentLoggerService::logMikrotikError(
+                "Gagal Isolir Pelanggan [{$customerName}]",
+                "Gagal mendisable akun di router MikroTik: " . $e->getMessage(),
+                [
+                    'customer_id'    => $this->customer->id,
+                    'customer_name'  => $customerName,
+                    'whatsapp'       => $this->customer->whatsapp,
+                    'billing_amount' => $this->customer->billing_amount,
+                    'due_date'       => $this->customer->due_date?->toDateString(),
+                    'attempts'       => $this->attempts(),
+                ]
+            );
 
             // If all retries exhausted, rollback is_isolated so billing:check can try again tomorrow
             if ($this->attempts() >= $this->tries) {

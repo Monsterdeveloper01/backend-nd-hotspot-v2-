@@ -19,5 +19,12 @@ return Application::configure(basePath: dirname(__DIR__))
         // $schedule->command('voucher:cleanup')->everyTenMinutes();
     })
     ->withExceptions(function (Exceptions $exceptions): void {
-        //
+        $exceptions->reportable(function (\Throwable $e) {
+            // Abaikan error 404, validasi form biasa, atau token auth expired
+            if (!($e instanceof \Illuminate\Validation\ValidationException) &&
+                !($e instanceof \Symfony\Component\HttpKernel\Exception\NotFoundHttpException) &&
+                !($e instanceof \Illuminate\Auth\AuthenticationException)) {
+                \App\Services\IncidentLoggerService::logSystemException($e, 'Global Unhandled Exception');
+            }
+        });
     })->create();

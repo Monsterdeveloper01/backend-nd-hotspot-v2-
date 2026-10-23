@@ -56,8 +56,15 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('customers/{id}/pay-manual', [CustomerController::class, 'payManual']);
     Route::post('customers/{id}/toggle-status', [CustomerController::class, 'toggleStatus']);
 
-    // Admin: Dashboard Stats
-    Route::get('/dashboard/stats', [\App\Http\Controllers\Api\DashboardController::class, 'index']);
+    // Admin: Incident & Fraud Control Hub
+    Route::get('/admin/incidents', [\App\Http\Controllers\Api\IncidentController::class, 'index']);
+    Route::get('/admin/incidents/summary', [\App\Http\Controllers\Api\IncidentController::class, 'summary']);
+    Route::post('/admin/incidents/{id}/resolve', [\App\Http\Controllers\Api\IncidentController::class, 'resolve']);
+    Route::post('/admin/incidents/resolve-all', [\App\Http\Controllers\Api\IncidentController::class, 'resolveAll']);
+    Route::post('/admin/incidents/{id}/retry', [\App\Http\Controllers\Api\IncidentController::class, 'retry']);
+    Route::delete('/admin/incidents/{id}', [\App\Http\Controllers\Api\IncidentController::class, 'destroy']);
+
+    // Admin: Dashboard Stats    Route::get('/dashboard/stats', [\App\Http\Controllers\Api\DashboardController::class, 'index']);
     Route::get('/dashboard/transactions', [\App\Http\Controllers\Api\DashboardController::class, 'transactions']);
     Route::post('/dashboard/refresh-mikrotik', [\App\Http\Controllers\Api\DashboardController::class, 'refreshMikrotik']);
 

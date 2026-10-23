@@ -10,6 +10,7 @@ use App\Services\WhatsAppService;
 use App\Services\EventAnalyticsService;
 use App\Services\PointService;
 use App\Services\MikrotikService;
+use App\Services\IncidentLoggerService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
@@ -90,6 +91,20 @@ class TransactionController extends Controller
                 'transaction' => $transaction->load('plan')
             ]);
         } catch (\Exception $e) {
+            IncidentLoggerService::report(
+                'checkout',
+                'critical',
+                'Gagal Generate Pembayaran QRIS',
+                "Gagal membuat transaksi CoreApi charge: " . $e->getMessage(),
+                [
+                    'voucher_plan_id' => $request->voucher_plan_id,
+                    'phone'           => $request->phone,
+                    'order_id'        => $orderId ?? null,
+                    'ip'              => $request->ip(),
+                ],
+                $e->getTraceAsString(),
+                'check_payment'
+            );
             return response()->json(['success' => false, 'message' => $e->getMessage()], 500);
         }
     }
@@ -183,6 +198,20 @@ class TransactionController extends Controller
                     'calculated' => $hashed,
                     'payload' => $orderId . $statusCode . $grossAmount . $serverKey
                 ]);
+
+                IncidentLoggerService::logPaymentFraud(
+                    'Percobaan Fraud: Midtrans Signature Palsu',
+                    "Diterima webhook pembayaran mencurigakan dengan signature key yang tidak cocok untuk Order ID [{$orderId}].",
+                    [
+                        'order_id'       => $orderId,
+                        'gross_amount'   => $grossAmount,
+                        'status_code'    => $statusCode,
+                        'ip_address'     => $request->ip(),
+                        'received_sig'   => $request->signature_key,
+                        'calculated_sig' => $hashed,
+                    ]
+                );
+
                 return response()->json(['message' => 'Invalid signature'], 403);
             }
 
@@ -255,6 +284,15 @@ class TransactionController extends Controller
                 
                 if (!$customer) {
                     \Log::error('CUSTOMER NOT FOUND', ['id' => $customerId]);
+                    IncidentLoggerService::report(
+                        'payment_fraud',
+                        'warning',
+                        'Pembayaran Tagihan: Customer Tidak Ditemukan',
+                        "Diterima pembayaran sukses untuk Order ID [{$orderId}], namun Customer ID [{$customerId}] tidak ada di database.",
+                        $request->all(),
+                        null,
+                        'check_payment'
+                    );
                     return response()->json(['message' => 'Customer not found'], 404);
                 }
 
@@ -318,6 +356,15 @@ class TransactionController extends Controller
         
         if (!$transaction) {
             \Log::error('TRANSACTION NOT FOUND', ['external_id' => $orderId]);
+            IncidentLoggerService::report(
+                'payment_fraud',
+                'warning',
+                'Pembayaran Voucher: Order ID Tidak Ditemukan',
+                "Diterima callback pembayaran Midtrans untuk Order [{$orderId}], namun external_id tidak ditemukan di database.",
+                $request->all(),
+                null,
+                'check_payment'
+            );
             return response()->json(['message' => 'Transaction not found'], 404);
         }
 

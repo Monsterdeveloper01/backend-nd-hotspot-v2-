@@ -7,6 +7,7 @@ use App\Models\Customer;
 use App\Services\TelegramService;
 use App\Jobs\SendWhatsAppJob;
 use App\Jobs\IsolateCustomerJob;
+use App\Services\IncidentLoggerService;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\Log;
 
@@ -47,30 +48,42 @@ class CheckCustomerBilling extends Command
         // 1. WhatsApp Reminders (H-1)
         $h1Customers = Customer::whereDate('due_date', $tomorrow)->get();
         foreach ($h1Customers as $customer) {
-            if ($customer->status_bayar === 'unpaid') {
-                $this->dispatchWhatsAppReminder($customer, "H-1 (Besok)");
-            } else {
-                Log::info("WA Skip: {$customer->name} (H-1) is already PAID.");
+            try {
+                if ($customer->status_bayar === 'unpaid') {
+                    $this->dispatchWhatsAppReminder($customer, "H-1 (Besok)");
+                } else {
+                    Log::info("WA Skip: {$customer->name} (H-1) is already PAID.");
+                }
+            } catch (\Throwable $e) {
+                IncidentLoggerService::report('billing', 'warning', "Gagal Kirim Reminder H-1 [{$customer->name}]", $e->getMessage(), ['customer_id' => $customer->id, 'whatsapp' => $customer->whatsapp]);
             }
         }
 
         // 2. WhatsApp Reminders (H - Hari Ini)
         $dueToday = Customer::whereDate('due_date', $today)->get();
         foreach ($dueToday as $customer) {
-            if ($customer->status_bayar === 'unpaid') {
-                $this->dispatchWhatsAppReminder($customer, "H (Hari Ini)");
-            } else {
-                Log::info("WA Skip: {$customer->name} (Today) is already PAID.");
+            try {
+                if ($customer->status_bayar === 'unpaid') {
+                    $this->dispatchWhatsAppReminder($customer, "H (Hari Ini)");
+                } else {
+                    Log::info("WA Skip: {$customer->name} (Today) is already PAID.");
+                }
+            } catch (\Throwable $e) {
+                IncidentLoggerService::report('billing', 'warning', "Gagal Kirim Reminder Hari H [{$customer->name}]", $e->getMessage(), ['customer_id' => $customer->id, 'whatsapp' => $customer->whatsapp]);
             }
         }
 
         // 3. WhatsApp Reminders (H+1 - Lewat Jatuh Tempo)
         $hPlus1 = Customer::whereDate('due_date', $yesterday)->get();
         foreach ($hPlus1 as $customer) {
-            if ($customer->status_bayar === 'unpaid') {
-                $this->dispatchWhatsAppReminder($customer, "H+1 (Terlambat)");
-            } else {
-                Log::info("WA Skip: {$customer->name} (H+1) is already PAID.");
+            try {
+                if ($customer->status_bayar === 'unpaid') {
+                    $this->dispatchWhatsAppReminder($customer, "H+1 (Terlambat)");
+                } else {
+                    Log::info("WA Skip: {$customer->name} (H+1) is already PAID.");
+                }
+            } catch (\Throwable $e) {
+                IncidentLoggerService::report('billing', 'warning', "Gagal Kirim Reminder H+1 [{$customer->name}]", $e->getMessage(), ['customer_id' => $customer->id, 'whatsapp' => $customer->whatsapp]);
             }
         }
 
