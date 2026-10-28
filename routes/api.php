@@ -19,10 +19,10 @@ Route::get('/router-status', function (App\Services\MikrotikService $mikrotik) {
 
 // Public routes for Landing Page & Checkout
 Route::get('/voucher-plans', [VoucherPlanController::class, 'index']);
-Route::post('/checkout', [TransactionController::class, 'checkout']);
-Route::get('/transaction-status/{id}', [TransactionController::class, 'status']);
-Route::get('/transactions/{id}', [TransactionController::class, 'status']); 
-Route::get('/voucher/details', [TransactionController::class, 'getVoucherByOrder']); // Tambahkan ini untuk polling voucher
+Route::post('/checkout', [TransactionController::class, 'checkout'])->middleware('throttle:30,1');
+Route::get('/transaction-status/{id}', [TransactionController::class, 'status'])->middleware('throttle:60,1');
+Route::get('/transactions/{id}', [TransactionController::class, 'status'])->middleware('throttle:60,1'); 
+Route::get('/voucher/details', [TransactionController::class, 'getVoucherByOrder'])->middleware('throttle:60,1');
 Route::post('/midtrans-callback', [TransactionController::class, 'callback']);
 
 Route::middleware('auth:sanctum')->group(function () {
@@ -133,21 +133,21 @@ Route::middleware('auth:sanctum')->group(function () {
 
 // Public: System Config & Tracking
 Route::get('/maintenance/status', [\App\Http\Controllers\Api\SystemConfigController::class, 'getStatus']);
-Route::post('/maintenance/bypass', [\App\Http\Controllers\Api\SystemConfigController::class, 'verifyBypass']);
+Route::post('/maintenance/bypass', [\App\Http\Controllers\Api\SystemConfigController::class, 'verifyBypass'])->middleware('throttle:10,1');
 Route::post('/log-visit', [\App\Http\Controllers\Api\AnalyticsController::class, 'logVisit']);
 
 // Public Customer Bill Lookup
-Route::get('/search-bill', [\App\Http\Controllers\Api\CustomerController::class, 'searchBill']);
-Route::get('/check-voucher', [VoucherController::class, 'checkVoucher']);
-Route::get('/customers/{id}/snap-token', [\App\Http\Controllers\Api\CustomerController::class, 'getSnapToken']);
+Route::get('/search-bill', [\App\Http\Controllers\Api\CustomerController::class, 'searchBill'])->middleware('throttle:20,1');
+Route::get('/check-voucher', [VoucherController::class, 'checkVoucher'])->middleware('throttle:30,1');
+Route::get('/customers/{id}/snap-token', [\App\Http\Controllers\Api\CustomerController::class, 'getSnapToken'])->middleware('throttle:20,1');
 
 // Public Loyalty Progress Check & Active Event Info
 Route::match(['get', 'post'], '/loyalty/progress', [\App\Http\Controllers\Api\PublicLoyaltyController::class, 'check']);
 Route::get('/loyalty/active-event', [\App\Http\Controllers\Api\PublicLoyaltyController::class, 'getActiveEvent']);
 
-// WhatsApp Bot API (called by WA Gateway - no auth needed)
-Route::get('/wa/check-status', [WhatsAppBotController::class, 'checkStatus']);
-Route::post('/wa/complaint', [WhatsAppBotController::class, 'storeComplaint']);
+// WhatsApp Bot API (called by WA Gateway - rate limited)
+Route::get('/wa/check-status', [WhatsAppBotController::class, 'checkStatus'])->middleware('throttle:30,1');
+Route::post('/wa/complaint', [WhatsAppBotController::class, 'storeComplaint'])->middleware('throttle:20,1');
 
 Route::get('/test', function () {
     return response()->json([

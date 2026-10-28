@@ -12,6 +12,7 @@ use App\Services\PointService;
 use App\Services\MikrotikService;
 use App\Services\IncidentLoggerService;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
 use Carbon\Carbon;
@@ -372,13 +373,23 @@ class TransactionController extends Controller
         $transaction->load('plan');
         
         if ($request->transaction_status == 'settlement' || $request->transaction_status == 'capture') {
-            if ($transaction->status !== 'success') {
-                $transaction->status = 'success';
-                \Log::info('PROCESSING VOUCHER GENERATION', ['order_id' => $orderId]);
+            $isNewlySuccessful = false;
+            $voucherForNotify = null;
 
-                // Assign a voucher from stock or generate one if empty
-                $voucher = Voucher::where('voucher_plan_id', $transaction->voucher_plan_id)
+            DB::transaction(function () use ($transaction, $orderId, &$isNewlySuccessful, &$voucherForNotify) {
+                // Lock transaction row to prevent concurrent duplicate callback processing
+                $tx = Transaction::where('id', $transaction->id)->lockForUpdate()->first();
+                if (!$tx || $tx->status === 'success') {
+                    return; // Already processed by another concurrent thread
+                }
+
+                $tx->load('plan');
+                \Log::info('PROCESSING VOUCHER GENERATION (LOCKED)', ['order_id' => $orderId]);
+
+                // Assign a voucher from stock with lockForUpdate to prevent race condition
+                $voucher = Voucher::where('voucher_plan_id', $tx->voucher_plan_id)
                                  ->where('status', 'available')
+                                 ->lockForUpdate()
                                  ->first();
 
                 if (!$voucher) {
@@ -388,13 +399,13 @@ class TransactionController extends Controller
                     
                     $mikrotikId = null;
                     if (env('VOUCHER_MODE', 'radius') === 'mikrotik') {
-                        \Log::info('ATTEMPTING TO CREATE MIKROTIK USER', ['username' => $voucherCode, 'profile' => $transaction->plan->mikrotik_profile]);
+                        \Log::info('ATTEMPTING TO CREATE MIKROTIK USER', ['username' => $voucherCode, 'profile' => $tx->plan->mikrotik_profile]);
                         
                         $mikrotikResult = $this->mikrotik->createUser([
                             'username' => $voucherCode,
                             'password' => '', 
-                            'profile' => $transaction->plan->mikrotik_profile,
-                            'limit_uptime' => $transaction->plan->duration ?: '0'
+                            'profile' => $tx->plan->mikrotik_profile,
+                            'limit_uptime' => $tx->plan->duration ?: '0'
                         ]);
                         
                         \Log::info('MIKROTIK CREATE USER RESULT', ['result' => $mikrotikResult]);
@@ -405,11 +416,11 @@ class TransactionController extends Controller
                     }
 
                     $voucher = Voucher::create([
-                        'voucher_plan_id' => $transaction->voucher_plan_id,
+                        'voucher_plan_id' => $tx->voucher_plan_id,
                         'code' => $voucherCode,
-                        'price' => $transaction->plan->price,
+                        'price' => $tx->plan->price,
                         'status' => 'sold',
-                        'customer_phone' => $transaction->customer_phone,
+                        'customer_phone' => $tx->customer_phone,
                         'mikrotik_id' => $mikrotikId
                     ]);
                     \Log::info('NEW VOUCHER GENERATED', ['code' => $voucherCode]);
@@ -419,19 +430,29 @@ class TransactionController extends Controller
                         $this->mikrotik->createUser([
                             'username' => $voucher->code,
                             'password' => '', 
-                            'profile' => $transaction->plan->name,
-                            'limit_uptime' => $transaction->plan->duration ?: '0'
+                            'profile' => $tx->plan->name,
+                            'limit_uptime' => $tx->plan->duration ?: '0'
                         ]);
                     }
                     
                     $voucher->status = 'sold';
-                    $voucher->customer_phone = $transaction->customer_phone;
+                    $voucher->customer_phone = $tx->customer_phone;
                     $voucher->save();
                     \Log::info('VOUCHER FROM STOCK ASSIGNED', ['code' => $voucher->code]);
                 }
 
+                $tx->status = 'success';
+                $tx->voucher_id = $voucher->id;
+                $tx->save();
+
+                $isNewlySuccessful = true;
+                $voucherForNotify = $voucher;
                 $transaction->voucher_id = $voucher->id;
-                
+                $transaction->status = 'success';
+            });
+
+            // Perform notifications and event logging ONLY once if this execution marked it successful
+            if ($isNewlySuccessful && $voucherForNotify) {
                 // WA message is NOT sent here — it is sent by the /wa-notify endpoint
                 // in the WhatsApp Gateway (server.js) to avoid duplicate messages.
 
@@ -440,7 +461,7 @@ class TransactionController extends Controller
                     $waGatewayUrl = env('WHATSAPP_GATEWAY_URL', 'http://localhost:5000');
                     Http::post("{$waGatewayUrl}/wa-notify", [
                         'phone' => $transaction->customer_phone,
-                        'voucher_code' => $voucher->code,
+                        'voucher_code' => $voucherForNotify->code,
                         'plan_name' => $transaction->plan->name,
                         'amount' => (int)$transaction->amount,
                         'external_id' => $orderId,
@@ -449,8 +470,6 @@ class TransactionController extends Controller
                 } catch (\Exception $e) {
                     \Log::warning('WA BOT NOTIFY FAILED (non-critical)', ['error' => $e->getMessage()]);
                 }
-                
-                $transaction->save();
 
                 // Phase 1: Event Analytics — automatic background tracking
                 // Customer does NOT know this is happening. No notifications.
@@ -487,7 +506,11 @@ class TransactionController extends Controller
 
     public function status($id)
     {
-        $transaction = Transaction::with(['voucher', 'plan'])->findOrFail($id);
+        // Security: Only return non-sensitive fields required by frontend checkout polling
+        // Do not expose voucher codes, passwords, or customer phone numbers to prevent IDOR scraping
+        $transaction = Transaction::select('id', 'external_id', 'status', 'amount')
+            ->findOrFail($id);
+
         return response()->json($transaction);
     }
 

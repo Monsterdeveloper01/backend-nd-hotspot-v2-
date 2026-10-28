@@ -19,7 +19,13 @@ return [
 
     'allowed_methods' => ['*'],
 
-    'allowed_origins' => ['*', 'https://nd-hostpot.net'],
+    'allowed_origins' => array_values(array_filter([
+        env('FRONTEND_URL'),
+        'http://localhost:5173',
+        'http://localhost:3000',
+        'https://nd-hotspot.net',
+        'https://nd-hostpot.net',
+    ])),
 
     'allowed_origins_patterns' => [],
 

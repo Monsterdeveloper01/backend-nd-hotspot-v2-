@@ -24,10 +24,15 @@ class WhatsAppBotController extends Controller
      */
     public function checkStatus(Request $request)
     {
+        $secret = env('WA_GATEWAY_SECRET');
+        if ($secret && !hash_equals((string) $secret, (string) $request->header('X-Gateway-Secret', ''))) {
+            return response()->json(['found' => false, 'message' => 'Unauthorized Gateway'], 401);
+        }
+
         $query = trim($request->input('q', ''));
 
-        if (empty($query)) {
-            return response()->json(['found' => false, 'message' => 'Query is empty'], 400);
+        if (strlen($query) < 3) {
+            return response()->json(['found' => false, 'message' => 'Query minimal 3 karakter'], 400);
         }
 
         // 1. Try to find by voucher code
@@ -110,6 +115,11 @@ class WhatsAppBotController extends Controller
      */
     public function storeComplaint(Request $request)
     {
+        $secret = env('WA_GATEWAY_SECRET');
+        if ($secret && !hash_equals((string) $secret, (string) $request->header('X-Gateway-Secret', ''))) {
+            return response()->json(['message' => 'Unauthorized Gateway'], 401);
+        }
+
         $request->validate([
             'phone_number' => 'required|string',
             'raw_message' => 'required|string',

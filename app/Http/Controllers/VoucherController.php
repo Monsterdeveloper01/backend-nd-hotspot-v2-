@@ -202,37 +202,54 @@ class VoucherController extends Controller
         $type = $request->type ?? 'radius'; // Default to radius as per user preference
         $vouchers = [];
 
-        for ($i = 0; $i < $request->quantity; $i++) {
-            do {
-                $code = strtoupper(Str::random(6));
-            } while (Voucher::where('code', $code)->exists());
-
-            $mikrotikId = null;
-
-            if ($type === 'mikrotik') {
-                $mikrotikResult = $this->mikrotik->createUser([
-                    'username' => $code,
-                    'password' => '', 
-                    'profile' => $plan->name,
-                    'limit_uptime' => $plan->duration ?: '0'
-                ]);
-                $mikrotikId = $mikrotikResult[0]['.id'] ?? null;
-                
-                if (!$mikrotikResult) {
-                    continue; // Skip if mikrotik creation fails in local mode
-                }
+        // Optimize MikroTik connection: reuse a single API session for the entire batch
+        $batchStarted = false;
+        if ($type === 'mikrotik') {
+            $batchStarted = $this->mikrotik->beginBatch();
+            if (!$batchStarted) {
+                return response()->json([
+                    'message' => 'Gagal menghubungkan ke router MikroTik. Pastikan router online dan API port dapat dijangkau.'
+                ], 503);
             }
+        }
 
-            // Create in Local DB (Radius will read from here)
-            $voucher = Voucher::create([
-                'voucher_plan_id' => $plan->id,
-                'code' => $code,
-                'price' => $plan->price,
-                'status' => 'available',
-                'mikrotik_id' => $mikrotikId
-            ]);
-            
-            $vouchers[] = $voucher;
+        try {
+            for ($i = 0; $i < $request->quantity; $i++) {
+                do {
+                    $code = strtoupper(Str::random(6));
+                } while (Voucher::where('code', $code)->exists());
+
+                $mikrotikId = null;
+
+                if ($type === 'mikrotik') {
+                    $mikrotikResult = $this->mikrotik->createUser([
+                        'username' => $code,
+                        'password' => '', 
+                        'profile' => $plan->name,
+                        'limit_uptime' => $plan->duration ?: '0'
+                    ]);
+                    $mikrotikId = $mikrotikResult[0]['.id'] ?? null;
+                    
+                    if (!$mikrotikResult) {
+                        continue; // Skip if mikrotik creation fails in local mode
+                    }
+                }
+
+                // Create in Local DB (Radius will read from here)
+                $voucher = Voucher::create([
+                    'voucher_plan_id' => $plan->id,
+                    'code' => $code,
+                    'price' => $plan->price,
+                    'status' => 'available',
+                    'mikrotik_id' => $mikrotikId
+                ]);
+                
+                $vouchers[] = $voucher;
+            }
+        } finally {
+            if ($batchStarted) {
+                $this->mikrotik->endBatch();
+            }
         }
 
         return response()->json([

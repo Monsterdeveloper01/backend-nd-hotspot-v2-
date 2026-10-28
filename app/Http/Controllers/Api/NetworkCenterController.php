@@ -97,7 +97,7 @@ class NetworkCenterController extends Controller
     {
         $validated = $request->validate([
             'name' => 'required|string',
-            'ip_address' => 'required|string',
+            'ip_address' => 'required|ip',
             'username' => 'required|string',
             'password' => 'required|string',
             'type' => 'required|string',
@@ -118,7 +118,7 @@ class NetworkCenterController extends Controller
         
         $validated = $request->validate([
             'name' => 'required|string',
-            'ip_address' => 'required|string',
+            'ip_address' => 'required|ip',
             'username' => 'required|string',
             'password' => 'required|string',
             'type' => 'required|string',

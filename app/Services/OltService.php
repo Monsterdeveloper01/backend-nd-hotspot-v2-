@@ -20,13 +20,13 @@ class OltService
 
     public function snmpWalk($ip, $community, $oid)
     {
-        // -v2c: SNMP version 2c
-        // -c: Community string
-        // -t: Timeout in seconds
-        // -r: Retries
-        // -On: Output numeric OID
-        // -Oq: Quick print (simplifies values, e.g. STRING: "value" becomes "value")
-        $command = escapeshellcmd("snmpwalk -v2c -c {$community} -t {$this->timeout} -r {$this->retries} -On -Oq {$ip} {$oid}") . " 2>/dev/null";
+        $cmdCommunity = escapeshellarg((string) $community);
+        $cmdTimeout = (int) $this->timeout;
+        $cmdRetries = (int) $this->retries;
+        $cmdIp = escapeshellarg((string) $ip);
+        $cmdOid = escapeshellarg((string) $oid);
+
+        $command = "snmpwalk -v2c -c {$cmdCommunity} -t {$cmdTimeout} -r {$cmdRetries} -On -Oq {$cmdIp} {$cmdOid}";
         $output = shell_exec($command);
         
         $result = [];
@@ -44,7 +44,13 @@ class OltService
 
     public function snmpGet($ip, $community, $oid)
     {
-        $command = escapeshellcmd("snmpget -v2c -c {$community} -t {$this->timeout} -r {$this->retries} -On -Oq {$ip} {$oid}") . " 2>/dev/null";
+        $cmdCommunity = escapeshellarg((string) $community);
+        $cmdTimeout = (int) $this->timeout;
+        $cmdRetries = (int) $this->retries;
+        $cmdIp = escapeshellarg((string) $ip);
+        $cmdOid = escapeshellarg((string) $oid);
+
+        $command = "snmpget -v2c -c {$cmdCommunity} -t {$cmdTimeout} -r {$cmdRetries} -On -Oq {$cmdIp} {$cmdOid}";
         $output = shell_exec($command);
         
         if ($output && strpos($output, ' ') !== false) {

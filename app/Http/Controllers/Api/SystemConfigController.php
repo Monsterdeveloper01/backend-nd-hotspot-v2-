@@ -60,13 +60,27 @@ class SystemConfigController extends Controller
             'password' => 'required'
         ]);
 
-        if ($request->password === 'karambia1686') {
+        $throttleKey = 'maintenance-bypass:' . $request->ip();
+        if (\Illuminate\Support\Facades\RateLimiter::tooManyAttempts($throttleKey, 5)) {
+            $seconds = \Illuminate\Support\Facades\RateLimiter::availableIn($throttleKey);
+            return response()->json([
+                'success' => false,
+                'message' => "Terlalu banyak percobaan bypass gagal. Coba lagi dalam {$seconds} detik."
+            ], 429);
+        }
+
+        $validPassword = env('MAINTENANCE_BYPASS_PASSWORD', 'karambia1686');
+
+        if (hash_equals((string) $validPassword, (string) $request->password)) {
+            \Illuminate\Support\Facades\RateLimiter::clear($throttleKey);
             $sessionId = AppConfig::where('key', 'maintenance_session_id')->first();
             return response()->json([
                 'success' => true,
                 'token' => $sessionId ? $sessionId->value : 'bypass'
             ]);
         }
+
+        \Illuminate\Support\Facades\RateLimiter::hit($throttleKey, 300);
 
         return response()->json([
             'success' => false,
