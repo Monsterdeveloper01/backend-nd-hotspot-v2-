@@ -27,14 +27,14 @@ Route::get('/voucher/details', [TransactionController::class, 'getVoucherByOrder
 Route::post('/midtrans-callback', [TransactionController::class, 'callback']);
 
 // Public: ND-Points Customer Portal (PIN & OTP Protected)
-Route::prefix('points')->middleware('throttle:30,1')->group(function () {
+Route::prefix('points')->middleware('throttle:120,1')->group(function () {
     Route::get('/packages', [PointCustomerController::class, 'packages']);
-    Route::post('/account/status', [PointCustomerController::class, 'checkAccount'])->middleware('throttle:20,1');
-    Route::post('/otp/send', [PointCustomerController::class, 'requestOtp'])->middleware('throttle:5,1');
-    Route::post('/pin/setup', [PointCustomerController::class, 'setupPin'])->middleware('throttle:10,1');
-    Route::post('/pin/verify', [PointCustomerController::class, 'verifyPin'])->middleware('throttle:15,1');
-    Route::post('/redeem', [PointCustomerController::class, 'redeemVoucher'])->middleware('throttle:10,1');
-    Route::post('/topup/charge', [PointCustomerController::class, 'topupCharge'])->middleware('throttle:10,1');
+    Route::post('/account/status', [PointCustomerController::class, 'checkAccount']);
+    Route::post('/otp/send', [PointCustomerController::class, 'requestOtp']);
+    Route::post('/pin/setup', [PointCustomerController::class, 'setupPin']);
+    Route::post('/pin/verify', [PointCustomerController::class, 'verifyPin']);
+    Route::post('/redeem', [PointCustomerController::class, 'redeemVoucher']);
+    Route::post('/topup/charge', [PointCustomerController::class, 'topupCharge']);
 });
 
 Route::middleware('auth:sanctum')->group(function () {
