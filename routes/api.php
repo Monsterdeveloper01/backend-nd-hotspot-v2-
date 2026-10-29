@@ -9,6 +9,7 @@ use App\Http\Controllers\Api\RadiusClientController;
 use App\Http\Controllers\Api\WhatsAppBotController;
 use App\Http\Controllers\Api\EventController;
 use App\Http\Controllers\Api\PointAdminController;
+use App\Http\Controllers\Api\PointCustomerController;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/', function() { return view('welcome'); });
@@ -24,6 +25,17 @@ Route::get('/transaction-status/{id}', [TransactionController::class, 'status'])
 Route::get('/transactions/{id}', [TransactionController::class, 'status'])->middleware('throttle:60,1'); 
 Route::get('/voucher/details', [TransactionController::class, 'getVoucherByOrder'])->middleware('throttle:60,1');
 Route::post('/midtrans-callback', [TransactionController::class, 'callback']);
+
+// Public: ND-Points Customer Portal (PIN & OTP Protected)
+Route::prefix('points')->middleware('throttle:30,1')->group(function () {
+    Route::get('/packages', [PointCustomerController::class, 'packages']);
+    Route::post('/account/status', [PointCustomerController::class, 'checkAccount'])->middleware('throttle:20,1');
+    Route::post('/otp/send', [PointCustomerController::class, 'requestOtp'])->middleware('throttle:5,1');
+    Route::post('/pin/setup', [PointCustomerController::class, 'setupPin'])->middleware('throttle:10,1');
+    Route::post('/pin/verify', [PointCustomerController::class, 'verifyPin'])->middleware('throttle:15,1');
+    Route::post('/redeem', [PointCustomerController::class, 'redeemVoucher'])->middleware('throttle:10,1');
+    Route::post('/topup/charge', [PointCustomerController::class, 'topupCharge'])->middleware('throttle:10,1');
+});
 
 Route::middleware('auth:sanctum')->group(function () {
     Route::get('/user', [AuthController::class, 'me']);

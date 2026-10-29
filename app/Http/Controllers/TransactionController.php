@@ -373,6 +373,86 @@ class TransactionController extends Controller
         $transaction->load('plan');
         
         if ($request->transaction_status == 'settlement' || $request->transaction_status == 'capture') {
+            // Check if this is an ND-Points Top-Up transaction (Order ID starts with PTS-)
+            if (str_starts_with($orderId, 'PTS-')) {
+                DB::transaction(function () use ($transaction, $orderId) {
+                    $tx = Transaction::where('id', $transaction->id)->lockForUpdate()->first();
+                    if (!$tx || $tx->status === 'success') {
+                        return;
+                    }
+
+                    $amount = (int) floatval($tx->amount);
+                    
+                    // Determine points + bonus based on amount
+                    $packages = \App\Http\Controllers\Api\PointCustomerController::getAvailablePackages();
+                    $totalPoints = $amount;
+                    $bonusPoints = 0;
+                    foreach ($packages as $pkg) {
+                        if ((int) $pkg['price'] === $amount) {
+                            $totalPoints = (int) $pkg['total_points'];
+                            $bonusPoints = (int) $pkg['bonus_points'];
+                            break;
+                        }
+                    }
+
+                    // Update or create point account
+                    $phone = \App\Services\PhoneNumberService::normalize($tx->customer_phone);
+                    $account = \App\Models\PointAccount::firstOrCreate(
+                        ['phone' => $phone],
+                        ['balance' => 0, 'lifetime_earned' => 0, 'lifetime_spent' => 0, 'status' => 'active']
+                    );
+                    $account = \App\Models\PointAccount::where('id', $account->id)->lockForUpdate()->first();
+
+                    $balanceBefore = (int) $account->balance;
+                    $balanceAfter = $balanceBefore + $totalPoints;
+                    $account->balance = $balanceAfter;
+                    $account->lifetime_earned += $totalPoints;
+                    $account->save();
+
+                    // Record ledger
+                    \App\Models\PointTransaction::create([
+                        'point_account_id' => $account->id,
+                        'phone' => $phone,
+                        'type' => 'earn',
+                        'source_type' => 'topup',
+                        'source_id' => (string) $tx->id,
+                        'points' => $totalPoints,
+                        'balance_before' => $balanceBefore,
+                        'balance_after' => $balanceAfter,
+                        'description' => "Top-Up {$totalPoints} ND-Points (QRIS)",
+                        'metadata' => [
+                            'amount' => $amount,
+                            'order_id' => $orderId,
+                            'bonus_points' => $bonusPoints,
+                        ],
+                    ]);
+
+                    $tx->status = 'success';
+                    $tx->save();
+
+                    // Send WhatsApp Notification for Top-Up
+                    try {
+                        $amtFormatted = number_format($amount, 0, ',', '.');
+                        $ptsFormatted = number_format($totalPoints, 0, ',', '.');
+                        $balFormatted = number_format($balanceAfter, 0, ',', '.');
+
+                        $msg = "🎉 *TOP-UP ND-POINTS BERHASIL!*\n\n"
+                            . "Nomor: *{$phone}*\n"
+                            . "Pembayaran: *Rp {$amtFormatted}*\n"
+                            . "Poin Didapat: *+{$ptsFormatted} Poin*\n"
+                            . "Total Saldo Poin: *{$balFormatted} Poin*\n\n"
+                            . "Gunakan koin Anda kapan saja untuk membeli voucher internet instan di https://nd-hostpot.net tanpa perlu scan QRIS lagi.\n\n"
+                            . "_Terima kasih telah menggunakan ND-Hotspot!_";
+
+                        app(\App\Services\WhatsAppService::class)->sendMessage($phone, $msg, 'Top-Up Poin Sukses');
+                    } catch (\Throwable $we) {
+                        \Log::warning('WhatsApp topup notify error: ' . $we->getMessage());
+                    }
+                });
+
+                return response()->json(['message' => 'Point topup callback processed successfully'], 200);
+            }
+
             $isNewlySuccessful = false;
             $voucherForNotify = null;
 
