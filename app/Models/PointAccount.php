@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Support\Facades\Hash;
 
@@ -17,6 +18,10 @@ class PointAccount extends Model
         'pin_hash',
         'failed_pin_attempts',
         'locked_until',
+        'auto_debit_enabled',
+        'auto_debit_plan_id',
+        'auto_debit_last_run_at',
+        'auto_debit_fail_count',
     ];
 
     protected $hidden = [
@@ -29,6 +34,10 @@ class PointAccount extends Model
         'lifetime_spent' => 'integer',
         'failed_pin_attempts' => 'integer',
         'locked_until' => 'datetime',
+        'auto_debit_enabled' => 'boolean',
+        'auto_debit_plan_id' => 'integer',
+        'auto_debit_last_run_at' => 'datetime',
+        'auto_debit_fail_count' => 'integer',
     ];
 
     /**
@@ -109,6 +118,14 @@ class PointAccount extends Model
     public function transactions(): HasMany
     {
         return $this->hasMany(PointTransaction::class, 'point_account_id')->orderBy('created_at', 'desc');
+    }
+
+    /**
+     * Voucher plan configured for auto-debit renewal.
+     */
+    public function autoDebitPlan(): BelongsTo
+    {
+        return $this->belongsTo(VoucherPlan::class, 'auto_debit_plan_id');
     }
 
     /**

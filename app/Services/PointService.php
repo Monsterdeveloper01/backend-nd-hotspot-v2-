@@ -487,9 +487,18 @@ class PointService
             Log::warning('ND-Point: Voucher plan breakdown calculation warning: ' . $e->getMessage());
         }
 
+        $activatedAccounts = PointAccount::whereNotNull('pin_hash')->count();
+        $unactivatedAccounts = PointAccount::whereNull('pin_hash')->count();
+        $topupUsersCount = PointTransaction::where('source_type', 'topup')->distinct('phone')->count('phone');
+        $autoDebitActiveCount = PointAccount::where('auto_debit_enabled', true)->count();
+
         return [
             'summary' => [
                 'total_accounts' => $totalAccounts,
+                'activated_accounts' => $activatedAccounts,
+                'unactivated_accounts' => $unactivatedAccounts,
+                'topup_users_count' => $topupUsersCount,
+                'auto_debit_active_count' => $autoDebitActiveCount,
                 'total_points_generated' => $totalGenerated,
                 'total_points_spent' => $totalSpent,
                 'current_total_balance' => $totalBalance,

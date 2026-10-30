@@ -215,6 +215,28 @@ class DashboardController extends Controller
             ->take(30)
             ->get();
 
+        // 5. Auto-Debit Subscribers (ND-Points)
+        $autoDebitAccounts = \App\Models\PointAccount::with('autoDebitPlan')
+            ->where('auto_debit_enabled', true)
+            ->orderBy('updated_at', 'desc')
+            ->get();
+
+        $autoDebitUsers = $autoDebitAccounts->map(function ($acc) {
+            return [
+                'id' => $acc->id,
+                'phone' => $acc->phone,
+                'masked_phone' => $acc->masked_phone,
+                'balance' => (int) $acc->balance,
+                'plan_id' => $acc->auto_debit_plan_id,
+                'plan_name' => $acc->autoDebitPlan?->name ?? 'Paket Hotspot',
+                'plan_price' => (int) ($acc->autoDebitPlan?->price ?? 0),
+                'plan_duration' => $acc->autoDebitPlan?->duration ?? '-',
+                'fail_count' => (int) $acc->auto_debit_fail_count,
+                'last_run_at' => $acc->auto_debit_last_run_at ? $acc->auto_debit_last_run_at->format('d/m/Y H:i') : null,
+                'updated_at' => $acc->updated_at ? $acc->updated_at->format('d/m/Y H:i') : null,
+            ];
+        });
+
         return response()->json([
             'stats' => [
                 'monthly_revenue' => $monthlyRevenue,
@@ -233,6 +255,8 @@ class DashboardController extends Controller
                 'offline_onus' => $offlineOnus,
                 'total_onus' => $totalOnus,
                 'olt_stats' => $oltStats,
+                'auto_debit_count' => $autoDebitUsers->count(),
+                'auto_debit_users' => $autoDebitUsers,
             ],
             'chart' => $chartData,
             'voucher_chart' => $voucherChartData,
@@ -269,10 +293,34 @@ class DashboardController extends Controller
         } elseif ($request->filter === 'voucher') {
             $query->where(function($q) {
                 $q->where('external_id', 'like', 'ND-%')
-                  ->orWhereNotNull('voucher_plan_id')
-                  ->orWhereNotNull('voucher_id');
+                  ->orWhere(function($sub) {
+                      $sub->whereNotNull('voucher_plan_id')
+                          ->where('external_id', 'not like', 'PTS-%')
+                          ->where('payment_type', '!=', 'nd_points')
+                          ->where('payment_type', '!=', 'nd_points_autodebit');
+                  });
             })->where('payment_method', '!=', 'qris_statis')
-              ->where('external_id', 'not like', 'QRIS-%');
+              ->where('external_id', 'not like', 'QRIS-%')
+              ->where('external_id', 'not like', 'PTS-%');
+        } elseif ($request->filter === 'point_topup') {
+            $query->where(function($q) {
+                $q->where('external_id', 'like', 'PTS-TOPUP-%')
+                  ->orWhere('payment_type', 'point_topup')
+                  ->orWhere(function($sub) {
+                      $sub->where('external_id', 'like', 'PTS-%')
+                          ->where('external_id', 'not like', 'PTS-REDEEM-%')
+                          ->where('external_id', 'not like', 'PTS-VOUCHER-%')
+                          ->where('external_id', 'not like', 'PTS-AUTODEBIT-%');
+                  });
+            });
+        } elseif ($request->filter === 'point_redeem') {
+            $query->where(function($q) {
+                $q->where('external_id', 'like', 'PTS-REDEEM-%')
+                  ->orWhere('external_id', 'like', 'PTS-VOUCHER-%')
+                  ->orWhere('external_id', 'like', 'PTS-AUTODEBIT-%')
+                  ->orWhere('payment_type', 'nd_points')
+                  ->orWhere('payment_type', 'nd_points_autodebit');
+            });
         } elseif ($request->filter === 'qris') {
             $query->where(function($q) {
                 $q->where('payment_method', 'qris_statis')

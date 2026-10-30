@@ -228,6 +228,13 @@ class PointCustomerController extends Controller
         // 1. Verify PIN and Lockout status
         $verifyRes = PointSecurityService::verifyPin($normalizedPhone, $request->input('pin'));
         if (!$verifyRes['success']) {
+            IncidentLoggerService::report(
+                'point_fraud',
+                'warning',
+                'Percobaan Tukar Poin Ditolak (PIN Tidak Valid)',
+                "Nomor {$normalizedPhone} mencoba menukar voucher tetapi verifikasi PIN gagal: " . ($verifyRes['message'] ?? 'PIN Salah'),
+                ['phone' => $normalizedPhone, 'voucher_plan_id' => $request->input('voucher_plan_id')]
+            );
             return response()->json($verifyRes, 401);
         }
 
@@ -303,8 +310,8 @@ class PointCustomerController extends Controller
                     $voucher->save();
                 }
 
-                // Create Transaction record for history
-                $orderId = 'PTS-VOUCHER-' . time() . '-' . strtoupper(Str::random(4));
+                // Create Transaction record for history (Distinguishable ID: PTS-REDEEM-)
+                $orderId = 'PTS-REDEEM-' . time() . '-' . strtoupper(Str::random(4));
                 $tx = Transaction::create([
                     'external_id' => $orderId,
                     'voucher_plan_id' => $plan->id,
@@ -472,7 +479,7 @@ class PointCustomerController extends Controller
         Config::$isSanitized = true;
         Config::$is3ds = true;
 
-        $orderId = 'PTS-' . time() . '-' . rand(100, 999);
+        $orderId = 'PTS-TOPUP-' . time() . '-' . rand(100, 999);
         $amount = (int) $selected['price'];
 
         $params = [
@@ -512,12 +519,12 @@ class PointCustomerController extends Controller
                 $qrString = $response->qr_string;
             }
 
-            // Create pending transaction in transactions table
+            // Create pending transaction in transactions table (Payment type: point_topup)
             $tx = Transaction::create([
                 'external_id' => $orderId,
                 'customer_phone' => $normalizedPhone,
                 'amount' => $amount,
-                'payment_type' => 'qris',
+                'payment_type' => 'point_topup',
                 'status' => 'pending',
                 'qr_string' => $qrString,
                 'snap_token' => $qrisUrl,
@@ -536,11 +543,112 @@ class PointCustomerController extends Controller
 
         } catch (\Throwable $e) {
             Log::error('PointCustomerController: Midtrans charge error: ' . $e->getMessage());
+            IncidentLoggerService::report(
+                'point_fraud',
+                'critical',
+                'Gagal Inisiasi Top-Up Midtrans QRIS',
+                "Error generate QRIS top-up untuk nomor {$normalizedPhone}: " . $e->getMessage(),
+                ['phone' => $normalizedPhone, 'amount' => $amount]
+            );
             return response()->json([
                 'success' => false,
                 'message' => 'Gagal membuat QRIS Top-Up: ' . $e->getMessage(),
             ], 500);
         }
+    }
+
+    /**
+     * Get Auto-Debit configuration for customer
+     */
+    public function getAutoDebit(Request $request)
+    {
+        $validator = Validator::make($request->all(), [
+            'phone' => 'required|string|min:8|max:25',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json(['success' => false, 'message' => $validator->errors()->first()], 422);
+        }
+
+        $phone = PhoneNumberService::normalize($request->input('phone'));
+        $account = PointAccount::with('autoDebitPlan')->where('phone', $phone)->first();
+
+        if (!$account) {
+            return response()->json(['success' => false, 'message' => 'Akun tidak ditemukan.'], 404);
+        }
+
+        return response()->json([
+            'success' => true,
+            'auto_debit_enabled' => (bool) $account->auto_debit_enabled,
+            'auto_debit_plan_id' => $account->auto_debit_plan_id,
+            'auto_debit_plan' => $account->autoDebitPlan,
+            'last_run_at' => $account->auto_debit_last_run_at ? $account->auto_debit_last_run_at->format('Y-m-d H:i:s') : null,
+            'fail_count' => (int) $account->auto_debit_fail_count,
+        ]);
+    }
+
+    /**
+     * Configure Auto-Debit (Enable/Disable & Select Plan)
+     */
+    public function toggleAutoDebit(Request $request)
+    {
+        $validator = Validator::make($request->all(), [
+            'phone' => 'required|string|min:8|max:25',
+            'pin' => 'required|string|regex:/^[0-9]{6}$/',
+            'enabled' => 'required|boolean',
+            'voucher_plan_id' => 'nullable|exists:voucher_plans,id',
+        ], [
+            'pin.regex' => 'PIN harus terdiri dari 6 angka.',
+            'voucher_plan_id.exists' => 'Paket voucher pilihan tidak valid.',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json(['success' => false, 'message' => $validator->errors()->first()], 422);
+        }
+
+        $phone = PhoneNumberService::normalize($request->input('phone'));
+        $pinCheck = PointSecurityService::verifyPin($phone, $request->input('pin'));
+        if (!$pinCheck['success']) {
+            IncidentLoggerService::report(
+                'point_fraud',
+                'warning',
+                'Percobaan Konfigurasi Auto-Debit Ditolak (PIN Salah)',
+                "Nomor {$phone} gagal verifikasi PIN saat mencoba mengubah pengaturan auto-debit.",
+                ['phone' => $phone]
+            );
+            return response()->json($pinCheck, 401);
+        }
+
+        $account = PointAccount::where('phone', $phone)->first();
+        if (!$account) {
+            return response()->json(['success' => false, 'message' => 'Akun tidak ditemukan.'], 404);
+        }
+
+        $enabled = $request->boolean('enabled');
+        $planId = $request->input('voucher_plan_id');
+
+        if ($enabled && empty($planId)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Harap pilih paket voucher untuk perpanjangan otomatis.',
+            ], 422);
+        }
+
+        $account->auto_debit_enabled = $enabled;
+        $account->auto_debit_plan_id = $enabled ? $planId : null;
+        $account->auto_debit_fail_count = 0;
+        $account->save();
+
+        $account->load('autoDebitPlan');
+
+        return response()->json([
+            'success' => true,
+            'message' => $enabled
+                ? '⚡ Auto-Debit berhasil diaktifkan untuk paket ' . ($account->autoDebitPlan->name ?? '')
+                : 'Auto-Debit berhasil dinonaktifkan.',
+            'auto_debit_enabled' => (bool) $account->auto_debit_enabled,
+            'auto_debit_plan' => $account->autoDebitPlan,
+        ]);
     }
 }
 

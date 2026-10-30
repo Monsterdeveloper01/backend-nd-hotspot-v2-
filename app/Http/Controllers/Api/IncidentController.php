@@ -52,7 +52,8 @@ class IncidentController extends Controller
             'critical_count'        => SystemIncident::where('status', 'unresolved')->where('severity', 'critical')->count(),
             'today_count'           => SystemIncident::whereDate('created_at', $today)->count(),
             'whatsapp_failed_count' => SystemIncident::where('status', 'unresolved')->where('category', 'whatsapp')->count(),
-            'fraud_count'           => SystemIncident::where('status', 'unresolved')->where('category', 'payment_fraud')->count(),
+            'fraud_count'           => SystemIncident::where('status', 'unresolved')->whereIn('category', ['payment_fraud', 'point_fraud'])->count(),
+            'point_fraud_count'     => SystemIncident::where('status', 'unresolved')->where('category', 'point_fraud')->count(),
             'mikrotik_count'        => SystemIncident::where('status', 'unresolved')->where('category', 'mikrotik')->count(),
             'system_count'          => SystemIncident::where('status', 'unresolved')->where('category', 'system')->count(),
         ];

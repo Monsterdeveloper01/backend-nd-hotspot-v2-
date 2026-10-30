@@ -194,11 +194,29 @@ class PointSecurityService
         if (!$isValid) {
             $account->refresh();
             if ($account->isLocked()) {
+                IncidentLoggerService::report(
+                    'point_fraud',
+                    'critical',
+                    'AKUN ND-POINTS TERKUNCI (POTENSI BRUTE FORCE)',
+                    "Nomor {$phone} telah dikunci selama 15 menit akibat 5 kali salah memasukkan PIN berturut-turut.",
+                    ['phone' => $phone, 'failed_attempts' => $account->failed_pin_attempts]
+                );
+
                 return [
                     'success' => false,
                     'locked' => true,
                     'message' => 'PIN salah 5 kali berturut-turut. Akun dikunci sementara selama 15 menit.',
                 ];
+            }
+
+            if ($account->failed_pin_attempts >= 3) {
+                IncidentLoggerService::report(
+                    'point_fraud',
+                    'warning',
+                    'Percobaan Salah PIN ND-Points Berulang',
+                    "Nomor {$phone} telah salah memasukkan PIN sebanyak {$account->failed_pin_attempts} kali.",
+                    ['phone' => $phone, 'failed_attempts' => $account->failed_pin_attempts]
+                );
             }
 
             $attemptsLeft = max(0, 5 - (int) $account->failed_pin_attempts);

@@ -28,16 +28,34 @@ class PointAdminController extends Controller
     }
 
     /**
-     * List customer point accounts with search.
+     * List customer point accounts with search and filters.
      */
     public function accounts(Request $request): JsonResponse
     {
-        $query = PointAccount::query();
+        $query = PointAccount::with('autoDebitPlan')
+            ->withCount(['transactions as topup_count' => function ($q) {
+                $q->where('source_type', 'topup');
+            }]);
 
         if ($request->filled('search')) {
             $search = trim($request->input('search'));
             $normalizedSearch = PhoneNumberService::normalize($search) ?? $search;
             $query->where('phone', 'like', "%{$normalizedSearch}%");
+        }
+
+        if ($request->filled('filter')) {
+            $filter = $request->input('filter');
+            if ($filter === 'activated') {
+                $query->whereNotNull('pin_hash');
+            } elseif ($filter === 'unactivated') {
+                $query->whereNull('pin_hash');
+            } elseif ($filter === 'topup') {
+                $query->whereHas('transactions', function ($q) {
+                    $q->where('source_type', 'topup');
+                });
+            } elseif ($filter === 'autodebit') {
+                $query->where('auto_debit_enabled', true);
+            }
         }
 
         $sort = $request->input('sort', 'balance');
@@ -48,11 +66,17 @@ class PointAdminController extends Controller
             $query->orderBy('balance', 'desc');
         }
 
-        $accounts = $query->paginate($request->input('per_page', 25));
+        $paginator = $query->paginate($request->input('per_page', 25));
+
+        $paginator->getCollection()->transform(function ($acc) {
+            $acc->is_activated = $acc->hasPin();
+            $acc->has_topup = ((int) $acc->topup_count) > 0;
+            return $acc;
+        });
 
         return response()->json([
             'status' => 'success',
-            'data' => $accounts,
+            'data' => $paginator,
         ]);
     }
 
