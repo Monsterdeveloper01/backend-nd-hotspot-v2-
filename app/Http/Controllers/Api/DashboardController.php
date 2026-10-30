@@ -222,6 +222,11 @@ class DashboardController extends Controller
             ->get();
 
         $autoDebitUsers = $autoDebitAccounts->map(function ($acc) {
+            $trigger = $acc->auto_debit_trigger_type ?: 'on_expiry';
+            $scheduleDesc = $trigger === 'monthly_date'
+                ? 'Setiap tgl ' . ($acc->auto_debit_day ?: 1)
+                : 'Setelah voucher habis';
+
             return [
                 'id' => $acc->id,
                 'phone' => $acc->phone,
@@ -231,6 +236,9 @@ class DashboardController extends Controller
                 'plan_name' => $acc->autoDebitPlan?->name ?? 'Paket Hotspot',
                 'plan_price' => (int) ($acc->autoDebitPlan?->price ?? 0),
                 'plan_duration' => $acc->autoDebitPlan?->duration ?? '-',
+                'trigger_type' => $trigger,
+                'day' => $acc->auto_debit_day,
+                'schedule_desc' => $scheduleDesc,
                 'fail_count' => (int) $acc->auto_debit_fail_count,
                 'last_run_at' => $acc->auto_debit_last_run_at ? $acc->auto_debit_last_run_at->format('d/m/Y H:i') : null,
                 'updated_at' => $acc->updated_at ? $acc->updated_at->format('d/m/Y H:i') : null,

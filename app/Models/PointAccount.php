@@ -20,6 +20,8 @@ class PointAccount extends Model
         'locked_until',
         'auto_debit_enabled',
         'auto_debit_plan_id',
+        'auto_debit_trigger_type',
+        'auto_debit_day',
         'auto_debit_last_run_at',
         'auto_debit_fail_count',
     ];
@@ -36,6 +38,8 @@ class PointAccount extends Model
         'locked_until' => 'datetime',
         'auto_debit_enabled' => 'boolean',
         'auto_debit_plan_id' => 'integer',
+        'auto_debit_trigger_type' => 'string',
+        'auto_debit_day' => 'integer',
         'auto_debit_last_run_at' => 'datetime',
         'auto_debit_fail_count' => 'integer',
     ];

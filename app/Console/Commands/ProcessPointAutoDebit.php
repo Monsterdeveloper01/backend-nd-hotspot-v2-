@@ -29,7 +29,7 @@ class ProcessPointAutoDebit extends Command
         $this->info('Memulai pengecekan auto-debit ND-Points...');
         $results = $service->runAll();
 
-        $this->info("Pengecekan selesai. Total discan: {$results['total_scanned']}, Sukses: {$results['success']}, Gagal/Dilewati: {$results['failed']}");
+        $this->info("Pengecekan selesai. Total: {$results['total_scanned']}, Dieksekusi: {$results['processed']} (Sukses: {$results['success']}, Gagal: {$results['failed']}), Dilewati: {$results['skipped']}");
         return 0;
     }
 }

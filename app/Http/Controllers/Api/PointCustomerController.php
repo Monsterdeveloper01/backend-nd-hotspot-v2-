@@ -582,13 +582,15 @@ class PointCustomerController extends Controller
             'auto_debit_enabled' => (bool) $account->auto_debit_enabled,
             'auto_debit_plan_id' => $account->auto_debit_plan_id,
             'auto_debit_plan' => $account->autoDebitPlan,
+            'auto_debit_trigger_type' => $account->auto_debit_trigger_type ?: 'on_expiry',
+            'auto_debit_day' => (int) ($account->auto_debit_day ?: 1),
             'last_run_at' => $account->auto_debit_last_run_at ? $account->auto_debit_last_run_at->format('Y-m-d H:i:s') : null,
             'fail_count' => (int) $account->auto_debit_fail_count,
         ]);
     }
 
     /**
-     * Configure Auto-Debit (Enable/Disable & Select Plan)
+     * Configure Auto-Debit (Enable/Disable & Select Plan and Schedule)
      */
     public function toggleAutoDebit(Request $request)
     {
@@ -597,9 +599,14 @@ class PointCustomerController extends Controller
             'pin' => 'required|string|regex:/^[0-9]{6}$/',
             'enabled' => 'required|boolean',
             'voucher_plan_id' => 'nullable|exists:voucher_plans,id',
+            'trigger_type' => 'nullable|string|in:on_expiry,monthly_date',
+            'day' => 'nullable|integer|min:1|max:31',
         ], [
             'pin.regex' => 'PIN harus terdiri dari 6 angka.',
             'voucher_plan_id.exists' => 'Paket voucher pilihan tidak valid.',
+            'trigger_type.in' => 'Pilihan jadwal auto-debit tidak valid.',
+            'day.min' => 'Tanggal perpanjangan minimal tanggal 1.',
+            'day.max' => 'Tanggal perpanjangan maksimal tanggal 31.',
         ]);
 
         if ($validator->fails()) {
@@ -626,6 +633,8 @@ class PointCustomerController extends Controller
 
         $enabled = $request->boolean('enabled');
         $planId = $request->input('voucher_plan_id');
+        $triggerType = $request->input('trigger_type', 'on_expiry');
+        $day = $request->input('day');
 
         if ($enabled && empty($planId)) {
             return response()->json([
@@ -634,20 +643,35 @@ class PointCustomerController extends Controller
             ], 422);
         }
 
+        if ($enabled && $triggerType === 'monthly_date' && (empty($day) || $day < 1 || $day > 31)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Harap tentukan tanggal pembelian bulanan (tanggal 1 - 31).',
+            ], 422);
+        }
+
         $account->auto_debit_enabled = $enabled;
         $account->auto_debit_plan_id = $enabled ? $planId : null;
+        $account->auto_debit_trigger_type = $enabled ? $triggerType : 'on_expiry';
+        $account->auto_debit_day = ($enabled && $triggerType === 'monthly_date') ? (int) $day : null;
         $account->auto_debit_fail_count = 0;
         $account->save();
 
         $account->load('autoDebitPlan');
 
+        $scheduleText = $triggerType === 'monthly_date'
+            ? "setiap tanggal {$account->auto_debit_day}"
+            : "setelah voucher sebelumnya habis";
+
         return response()->json([
             'success' => true,
             'message' => $enabled
-                ? '⚡ Auto-Debit berhasil diaktifkan untuk paket ' . ($account->autoDebitPlan->name ?? '')
+                ? "⚡ Auto-Debit aktif untuk paket {$account->autoDebitPlan->name} ({$scheduleText})."
                 : 'Auto-Debit berhasil dinonaktifkan.',
             'auto_debit_enabled' => (bool) $account->auto_debit_enabled,
             'auto_debit_plan' => $account->autoDebitPlan,
+            'auto_debit_trigger_type' => $account->auto_debit_trigger_type,
+            'auto_debit_day' => $account->auto_debit_day,
         ]);
     }
 }

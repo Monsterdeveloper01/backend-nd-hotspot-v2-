@@ -71,6 +71,10 @@ class PointAdminController extends Controller
         $paginator->getCollection()->transform(function ($acc) {
             $acc->is_activated = $acc->hasPin();
             $acc->has_topup = ((int) $acc->topup_count) > 0;
+            $trigger = $acc->auto_debit_trigger_type ?: 'on_expiry';
+            $acc->auto_debit_schedule_desc = $trigger === 'monthly_date'
+                ? 'Setiap tgl ' . ($acc->auto_debit_day ?: 1)
+                : 'Setelah voucher habis';
             return $acc;
         });
 

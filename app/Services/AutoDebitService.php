@@ -53,20 +53,23 @@ class AutoDebitService
                     'balance' => $account->balance,
                     'required' => $pointsRequired,
                     'fail_count' => $account->auto_debit_fail_count,
+                    'trigger_type' => $account->auto_debit_trigger_type,
                 ]
             );
 
-            // Send friendly WhatsApp notice
-            try {
-                $msg = "⚠️ *PEMBERITAHUAN AUTO-DEBIT ND-HOTSPOT*\n\n"
-                    . "Halo! Perpanjangan otomatis paket *{$plan->name}* tidak dapat diproses karena saldo ND-Points Anda tidak mencukupi.\n\n"
-                    . "Saldo Anda: *{$account->balance} Poin*\n"
-                    . "Diperlukan: *{$pointsRequired} Poin*\n\n"
-                    . "Silakan lakukan Top-Up ND-Points di portal https://nd-hostpot.net/points agar auto-debit dapat berjalan kembali.";
+            // Send friendly WhatsApp notice (only once per failure cycle to prevent notification spam)
+            if ($account->auto_debit_fail_count <= 1 || $account->auto_debit_fail_count % 144 === 0) {
+                try {
+                    $msg = "⚠️ *PEMBERITAHUAN AUTO-DEBIT ND-HOTSPOT*\n\n"
+                        . "Halo! Perpanjangan otomatis paket *{$plan->name}* tidak dapat diproses karena saldo ND-Points Anda tidak mencukupi.\n\n"
+                        . "Saldo Anda: *{$account->balance} Poin*\n"
+                        . "Diperlukan: *{$pointsRequired} Poin*\n\n"
+                        . "Silakan lakukan Top-Up ND-Points di portal https://nd-hostpot.net/points agar auto-debit dapat berjalan kembali.";
 
-                app(WhatsAppService::class)->sendMessage($account->phone, $msg, 'Auto-Debit Saldo Kurang');
-            } catch (\Throwable $we) {
-                Log::warning('AutoDebit: WA notice failed: ' . $we->getMessage());
+                    app(WhatsAppService::class)->sendMessage($account->phone, $msg, 'Auto-Debit Saldo Kurang');
+                } catch (\Throwable $we) {
+                    Log::warning('AutoDebit: WA notice failed: ' . $we->getMessage());
+                }
             }
 
             return ['success' => false, 'message' => 'Saldo poin tidak mencukupi untuk auto-debit.'];
@@ -217,6 +220,107 @@ class AutoDebitService
     }
 
     /**
+     * Check if a customer phone currently has an active, valid hotspot voucher.
+     *
+     * @param string $phone
+     * @return bool
+     */
+    public static function hasActiveVoucher(string $phone): bool
+    {
+        $latestVoucher = Voucher::where('customer_phone', $phone)
+            ->whereIn('status', ['sold', 'used'])
+            ->latest('id')
+            ->first();
+
+        if (!$latestVoucher) {
+            return false;
+        }
+
+        // If it has expires_at set, check if it's still unexpired in the future
+        if ($latestVoucher->expires_at) {
+            return $latestVoucher->expires_at->isFuture();
+        }
+
+        // If it is 'sold' and not yet used (first login pending),
+        // consider active if created recently (within 7 days)
+        if ($latestVoucher->status === 'sold' && !$latestVoucher->used_at) {
+            return $latestVoucher->created_at && $latestVoucher->created_at->gt(now()->subDays(7));
+        }
+
+        return false;
+    }
+
+    /**
+     * Check if a specific account is currently eligible to be debited based on its schedule.
+     *
+     * @param PointAccount $account
+     * @return array [eligible => bool, reason => string]
+     */
+    public static function isEligibleToRun(PointAccount $account): array
+    {
+        if (!$account->auto_debit_enabled) {
+            return ['eligible' => false, 'reason' => 'Auto-debit dinonaktifkan'];
+        }
+
+        if ($account->status !== 'active') {
+            return ['eligible' => false, 'reason' => 'Status akun ' . $account->status];
+        }
+
+        if (empty($account->auto_debit_plan_id)) {
+            return ['eligible' => false, 'reason' => 'Paket voucher belum dipilih'];
+        }
+
+        $triggerType = $account->auto_debit_trigger_type ?: 'on_expiry';
+
+        // MODE 1: Tanggal tertentu setiap bulan (e.g. tgl 1..31)
+        if ($triggerType === 'monthly_date') {
+            $targetDay = (int) ($account->auto_debit_day ?: 1);
+            $daysInMonth = (int) now()->daysInMonth;
+            $effectiveDay = min($targetDay, $daysInMonth);
+            $currentDay = (int) now()->day;
+
+            if ($currentDay !== $effectiveDay) {
+                return [
+                    'eligible' => false,
+                    'reason' => "Menunggu tanggal {$effectiveDay} (hari ini tgl {$currentDay})",
+                ];
+            }
+
+            // Check if already executed this month
+            if ($account->auto_debit_last_run_at) {
+                $lastRun = $account->auto_debit_last_run_at;
+                if ($lastRun->isSameMonth(now()) && $lastRun->isSameYear(now())) {
+                    return [
+                        'eligible' => false,
+                        'reason' => 'Sudah dieksekusi bulan ini pada ' . $lastRun->format('d/m/Y H:i'),
+                    ];
+                }
+            }
+
+            return ['eligible' => true, 'reason' => "Jadwal bulanan tanggal {$effectiveDay} terpenuhi"];
+        }
+
+        // MODE 2: Setelah voucher sebelumnya habis / kedaluwarsa (on_expiry)
+        // Check if customer still has an active voucher
+        if (self::hasActiveVoucher($account->phone)) {
+            return [
+                'eligible' => false,
+                'reason' => 'Voucher sebelumnya masih aktif/berlaku',
+            ];
+        }
+
+        // Prevent rapid re-debiting if it ran within the last 30 minutes
+        if ($account->auto_debit_last_run_at && $account->auto_debit_last_run_at->gt(now()->subMinutes(30))) {
+            return [
+                'eligible' => false,
+                'reason' => 'Baru saja dieksekusi pada ' . $account->auto_debit_last_run_at->format('H:i') . ' (cooldown 30m)',
+            ];
+        }
+
+        return ['eligible' => true, 'reason' => 'Voucher sebelumnya telah habis/kedaluwarsa'];
+    }
+
+    /**
      * Run auto-debit for all eligible customers whose vouchers need renewal.
      */
     public static function runAll(): array
@@ -227,10 +331,17 @@ class AutoDebitService
             ->get();
 
         $processed = 0;
+        $skippedCount = 0;
         $successCount = 0;
         $failCount = 0;
 
         foreach ($accounts as $acc) {
+            $eligibility = self::isEligibleToRun($acc);
+            if (!$eligibility['eligible']) {
+                $skippedCount++;
+                continue;
+            }
+
             $processed++;
             $res = self::processAccount($acc);
             if ($res['success']) {
@@ -242,6 +353,7 @@ class AutoDebitService
 
         return [
             'total_scanned' => $accounts->count(),
+            'skipped' => $skippedCount,
             'processed' => $processed,
             'success' => $successCount,
             'failed' => $failCount,
