@@ -22,7 +22,7 @@ class AutoDebitService
     public static function processAccount(PointAccount $account): array
     {
         if (!$account->auto_debit_enabled || empty($account->auto_debit_plan_id)) {
-            return ['success' => false, 'message' => 'Auto-debit tidak aktif pada akun ini.'];
+            return ['success' => false, 'message' => 'ND Auto-Voucher tidak aktif pada akun ini.'];
         }
 
         $plan = VoucherPlan::find($account->auto_debit_plan_id);
@@ -30,11 +30,11 @@ class AutoDebitService
             IncidentLoggerService::report(
                 'point_fraud',
                 'warning',
-                'Auto-Debit Gagal: Paket Voucher Tidak Ditemukan',
-                "Akun {$account->phone} memiliki auto-debit untuk plan ID {$account->auto_debit_plan_id} yang sudah tidak ada.",
+                'ND Auto-Voucher Gagal: Paket Voucher Tidak Ditemukan',
+                "Akun {$account->phone} memiliki jadwal ND Auto-Voucher untuk plan ID {$account->auto_debit_plan_id} yang sudah tidak ada.",
                 ['phone' => $account->phone, 'plan_id' => $account->auto_debit_plan_id]
             );
-            return ['success' => false, 'message' => 'Paket voucher auto-debit tidak ditemukan.'];
+            return ['success' => false, 'message' => 'Paket voucher ND Auto-Voucher tidak ditemukan.'];
         }
 
         $pointsRequired = (int) $plan->price;
@@ -46,7 +46,7 @@ class AutoDebitService
             IncidentLoggerService::report(
                 'point_fraud',
                 'warning',
-                'Auto-Debit Ditolak (Saldo Poin Kurang)',
+                'ND Auto-Voucher Ditolak (Saldo Poin Kurang)',
                 "Nomor {$account->phone} gagal perpanjang paket {$plan->name}. Saldo: {$account->balance} Pts, Diperlukan: {$pointsRequired} Pts.",
                 [
                     'phone' => $account->phone,
@@ -60,19 +60,19 @@ class AutoDebitService
             // Send friendly WhatsApp notice (only once per failure cycle to prevent notification spam)
             if ($account->auto_debit_fail_count <= 1 || $account->auto_debit_fail_count % 144 === 0) {
                 try {
-                    $msg = "⚠️ *PEMBERITAHUAN AUTO-DEBIT ND-HOTSPOT*\n\n"
-                        . "Halo! Perpanjangan otomatis paket *{$plan->name}* tidak dapat diproses karena saldo ND-Points Anda tidak mencukupi.\n\n"
+                    $msg = "⚠️ *PEMBERITAHUAN ND AUTO-VOUCHER ND-HOTSPOT*\n\n"
+                        . "Halo! Perpanjangan otomatis ND Auto-Voucher paket *{$plan->name}* tidak dapat diproses karena saldo ND-Points Anda tidak mencukupi.\n\n"
                         . "Saldo Anda: *{$account->balance} Poin*\n"
                         . "Diperlukan: *{$pointsRequired} Poin*\n\n"
-                        . "Silakan lakukan Top-Up ND-Points di portal https://nd-hostpot.net/points agar auto-debit dapat berjalan kembali.";
+                        . "Silakan lakukan Top-Up ND-Points di portal https://nd-hostpot.net/points agar ND Auto-Voucher dapat berjalan kembali.";
 
-                    app(WhatsAppService::class)->sendMessage($account->phone, $msg, 'Auto-Debit Saldo Kurang');
+                    app(WhatsAppService::class)->sendMessage($account->phone, $msg, 'ND Auto-Voucher Saldo Kurang');
                 } catch (\Throwable $we) {
                     Log::warning('AutoDebit: WA notice failed: ' . $we->getMessage());
                 }
             }
 
-            return ['success' => false, 'message' => 'Saldo poin tidak mencukupi untuk auto-debit.'];
+            return ['success' => false, 'message' => 'Saldo poin tidak mencukupi untuk ND Auto-Voucher.'];
         }
 
         // Execute transaction atomically
@@ -162,7 +162,7 @@ class AutoDebitService
                     'points' => -$pointsRequired,
                     'balance_before' => $balanceBefore,
                     'balance_after' => $balanceAfter,
-                    'description' => '⚡ Auto-Debit Perpanjangan: ' . $plan->name,
+                    'description' => '⚡ ND Auto-Voucher Perpanjangan: ' . $plan->name,
                     'metadata' => [
                         'voucher_plan_id' => $plan->id,
                         'plan_name' => $plan->name,
@@ -185,7 +185,7 @@ class AutoDebitService
                 $balFormatted = number_format($result['balance_after'], 0, ',', '.');
                 $ptsFormatted = number_format($pointsRequired, 0, ',', '.');
 
-                $msg = "⚡ *AUTO-DEBIT ND-HOTSPOT BERHASIL!*\n\n"
+                $msg = "⚡ *ND AUTO-VOUCHER ND-HOTSPOT BERHASIL!*\n\n"
                     . "Paket: *{$plan->name}*\n"
                     . "Durasi: *{$plan->duration}*\n"
                     . "Kode Voucher: *{$voucher->code}*\n"
@@ -193,9 +193,9 @@ class AutoDebitService
                     . "Sisa Saldo Poin: *{$balFormatted} Poin*\n\n"
                     . "🌐 *Login Otomatis:* \n"
                     . "http://ndnet.login/login?username={$voucher->code}&password=\n\n"
-                    . "Layanan internet Anda telah diperpanjang otomatis secara instan. Terima kasih!";
+                    . "Layanan internet Anda telah diperpanjang otomatis secara instan via ND Auto-Voucher. Terima kasih!";
 
-                app(WhatsAppService::class)->sendMessage($account->phone, $msg, 'Auto-Debit Sukses');
+                app(WhatsAppService::class)->sendMessage($account->phone, $msg, 'ND Auto-Voucher Sukses');
             } catch (\Throwable $we) {
                 Log::warning('AutoDebit: WA success notification failed: ' . $we->getMessage());
             }
@@ -210,24 +210,37 @@ class AutoDebitService
             IncidentLoggerService::report(
                 'point_fraud',
                 'critical',
-                'FATAL ERROR MESIN AUTO-DEBIT',
-                "Gagal eksekusi auto-debit untuk nomor {$account->phone}: " . $e->getMessage(),
+                'FATAL ERROR MESIN ND AUTO-VOUCHER',
+                "Gagal eksekusi ND Auto-Voucher untuk nomor {$account->phone}: " . $e->getMessage(),
                 ['phone' => $account->phone, 'plan_id' => $plan->id, 'error' => $e->getMessage()]
             );
 
-            return ['success' => false, 'message' => 'Gagal memproses auto-debit: ' . $e->getMessage()];
+            return ['success' => false, 'message' => 'Gagal memproses ND Auto-Voucher: ' . $e->getMessage()];
         }
     }
 
     /**
      * Check if a customer phone currently has an active, valid hotspot voucher.
+     * Checks all vouchers owned by the phone (both bought via QRIS, Points, or Admin).
      *
      * @param string $phone
      * @return bool
      */
     public static function hasActiveVoucher(string $phone): bool
     {
-        $latestVoucher = Voucher::where('customer_phone', $phone)
+        $normalized = PhoneNumberService::normalize($phone) ?? preg_replace('/[^0-9]/', '', $phone);
+        
+        // Build all possible phone number format variants (08xx, 628xx, +628xx, 8xx)
+        // to guarantee matching vouchers purchased through QRIS, web, or WhatsApp bot
+        $phoneVariants = array_unique(array_filter([
+            $phone,
+            $normalized,
+            str_starts_with($normalized, '62') ? '0' . substr($normalized, 2) : null,
+            '+' . $normalized,
+            str_starts_with($normalized, '62') ? substr($normalized, 2) : null,
+        ]));
+
+        $latestVoucher = Voucher::whereIn('customer_phone', $phoneVariants)
             ->whereIn('status', ['sold', 'used'])
             ->latest('id')
             ->first();
@@ -259,7 +272,7 @@ class AutoDebitService
     public static function isEligibleToRun(PointAccount $account): array
     {
         if (!$account->auto_debit_enabled) {
-            return ['eligible' => false, 'reason' => 'Auto-debit dinonaktifkan'];
+            return ['eligible' => false, 'reason' => 'ND Auto-Voucher dinonaktifkan'];
         }
 
         if ($account->status !== 'active') {

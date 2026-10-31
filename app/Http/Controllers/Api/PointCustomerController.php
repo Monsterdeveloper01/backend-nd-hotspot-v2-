@@ -8,6 +8,7 @@ use App\Models\PointTransaction;
 use App\Models\Transaction;
 use App\Models\Voucher;
 use App\Models\VoucherPlan;
+use App\Services\AutoDebitService;
 use App\Services\IncidentLoggerService;
 use App\Services\MikrotikService;
 use App\Services\PhoneNumberService;
@@ -604,7 +605,7 @@ class PointCustomerController extends Controller
         ], [
             'pin.regex' => 'PIN harus terdiri dari 6 angka.',
             'voucher_plan_id.exists' => 'Paket voucher pilihan tidak valid.',
-            'trigger_type.in' => 'Pilihan jadwal auto-debit tidak valid.',
+            'trigger_type.in' => 'Pilihan jadwal ND Auto-Voucher tidak valid.',
             'day.min' => 'Tanggal perpanjangan minimal tanggal 1.',
             'day.max' => 'Tanggal perpanjangan maksimal tanggal 31.',
         ]);
@@ -619,8 +620,8 @@ class PointCustomerController extends Controller
             IncidentLoggerService::report(
                 'point_fraud',
                 'warning',
-                'Percobaan Konfigurasi Auto-Debit Ditolak (PIN Salah)',
-                "Nomor {$phone} gagal verifikasi PIN saat mencoba mengubah pengaturan auto-debit.",
+                'Percobaan Konfigurasi ND Auto-Voucher Ditolak (PIN Salah)',
+                "Nomor {$phone} gagal verifikasi PIN saat mencoba mengubah pengaturan ND Auto-Voucher.",
                 ['phone' => $phone]
             );
             return response()->json($pinCheck, 401);
@@ -659,19 +660,50 @@ class PointCustomerController extends Controller
 
         $account->load('autoDebitPlan');
 
-        $scheduleText = $triggerType === 'monthly_date'
-            ? "setiap tanggal {$account->auto_debit_day}"
-            : "setelah voucher sebelumnya habis";
+        $initialVoucher = null;
+        $message = $enabled
+            ? "⚡ ND Auto-Voucher aktif untuk paket {$account->autoDebitPlan->name}."
+            : 'ND Auto-Voucher berhasil dinonaktifkan.';
+
+        // OPSI A: Jika user mengaktifkan mode 'on_expiry' dan belum memiliki voucher aktif,
+        // sistem langsung membelikan voucher pertama saat itu juga!
+        if ($enabled && $triggerType === 'on_expiry') {
+            if (!AutoDebitService::hasActiveVoucher($phone)) {
+                $pointsRequired = (int) ($account->autoDebitPlan->price ?? 0);
+                if ($account->balance >= $pointsRequired) {
+                    $autoDebitRes = AutoDebitService::processAccount($account);
+                    if ($autoDebitRes['success']) {
+                        $account->refresh();
+                        $voucher = $autoDebitRes['data']['voucher'] ?? null;
+                        if ($voucher) {
+                            $initialVoucher = [
+                                'voucher_code' => $voucher->code,
+                                'plan_name' => $account->autoDebitPlan->name ?? 'Paket Hotspot',
+                                'points_spent' => $pointsRequired,
+                                'login_url' => 'http://ndnet.login/login?username=' . $voucher->code . '&password=',
+                                'balance_after' => (int) $account->balance,
+                            ];
+                            $message = "⚡ ND Auto-Voucher aktif! Karena Anda belum memiliki voucher aktif, voucher pertama ({$voucher->code}) langsung diterbitkan dan dikirim ke WhatsApp Anda.";
+                        }
+                    }
+                } else {
+                    $message = "⚡ ND Auto-Voucher aktif untuk paket {$account->autoDebitPlan->name}. Voucher pertama akan otomatis dibeli begitu saldo poin Anda mencukupi.";
+                }
+            } else {
+                $message = "⚡ ND Auto-Voucher aktif! Voucher baru akan otomatis dibeli begitu masa aktif voucher Anda saat ini telah habis.";
+            }
+        } elseif ($enabled && $triggerType === 'monthly_date') {
+            $message = "⚡ ND Auto-Voucher aktif untuk paket {$account->autoDebitPlan->name} (setiap tanggal {$account->auto_debit_day}).";
+        }
 
         return response()->json([
             'success' => true,
-            'message' => $enabled
-                ? "⚡ Auto-Debit aktif untuk paket {$account->autoDebitPlan->name} ({$scheduleText})."
-                : 'Auto-Debit berhasil dinonaktifkan.',
+            'message' => $message,
             'auto_debit_enabled' => (bool) $account->auto_debit_enabled,
             'auto_debit_plan' => $account->autoDebitPlan,
             'auto_debit_trigger_type' => $account->auto_debit_trigger_type,
             'auto_debit_day' => $account->auto_debit_day,
+            'initial_voucher' => $initialVoucher,
         ]);
     }
 }

@@ -19,14 +19,14 @@ class ProcessPointAutoDebit extends Command
      *
      * @var string
      */
-    protected $description = 'Proses auto-debit ND-Points untuk perpanjangan voucher customer yang telah habis';
+    protected $description = 'Proses ND Auto-Voucher untuk perpanjangan voucher customer';
 
     /**
      * Execute the console command.
      */
     public function handle(AutoDebitService $service)
     {
-        $this->info('Memulai pengecekan auto-debit ND-Points...');
+        $this->info('Memulai pengecekan ND Auto-Voucher...');
         $results = $service->runAll();
 
         $this->info("Pengecekan selesai. Total: {$results['total_scanned']}, Dieksekusi: {$results['processed']} (Sukses: {$results['success']}, Gagal: {$results['failed']}), Dilewati: {$results['skipped']}");
