@@ -174,8 +174,9 @@ class VoucherHousekeeping extends Command
                             'comment' => "ND-AUTOHEAL: {$sv->code} ({$sv->customer_phone})"
                         ]);
                         $isResOk = is_array($res) && !isset($res['!trap']) && !isset($res['type']) && (isset($res[0]['ret']) || isset($res[0]['.id']) || !empty($res));
-                        if ($isResOk) {
-                            $resId = $res[0]['ret'] ?? $res[0]['.id'] ?? 'created';
+                        $resMsg = strtolower($res['message'] ?? $res['!trap'] ?? '');
+                        if ($isResOk || str_contains($resMsg, 'already have user') || str_contains($resMsg, 'already exists')) {
+                            $resId = $res[0]['ret'] ?? $res[0]['.id'] ?? 'existing';
                             $sv->update(['mikrotik_id' => $resId]);
                             $healedCount++;
                             $this->info("Berhasil meng-inject kembali voucher missing ke MikroTik: {$sv->code}");
