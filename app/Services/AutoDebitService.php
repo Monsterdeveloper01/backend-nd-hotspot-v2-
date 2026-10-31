@@ -237,6 +237,23 @@ class AutoDebitService
     }
 
     /**
+     * Build all possible phone number format variants (08xx, 628xx, +628xx, 8xx)
+     * to guarantee matching vouchers purchased through QRIS, web, or WhatsApp bot.
+     */
+    public static function getPhoneVariants(string $phone): array
+    {
+        $normalized = PhoneNumberService::normalize($phone) ?? preg_replace('/[^0-9]/', '', $phone);
+
+        return array_unique(array_filter([
+            $phone,
+            $normalized,
+            str_starts_with($normalized, '62') ? '0' . substr($normalized, 2) : null,
+            '+' . $normalized,
+            str_starts_with($normalized, '62') ? substr($normalized, 2) : null,
+        ]));
+    }
+
+    /**
      * Check if a customer phone currently has an active, valid hotspot voucher.
      * Checks all vouchers owned by the phone (both bought via QRIS, Points, or Admin).
      *
@@ -245,17 +262,7 @@ class AutoDebitService
      */
     public static function hasActiveVoucher(string $phone): bool
     {
-        $normalized = PhoneNumberService::normalize($phone) ?? preg_replace('/[^0-9]/', '', $phone);
-        
-        // Build all possible phone number format variants (08xx, 628xx, +628xx, 8xx)
-        // to guarantee matching vouchers purchased through QRIS, web, or WhatsApp bot
-        $phoneVariants = array_unique(array_filter([
-            $phone,
-            $normalized,
-            str_starts_with($normalized, '62') ? '0' . substr($normalized, 2) : null,
-            '+' . $normalized,
-            str_starts_with($normalized, '62') ? substr($normalized, 2) : null,
-        ]));
+        $phoneVariants = self::getPhoneVariants($phone);
 
         $latestVoucher = Voucher::whereIn('customer_phone', $phoneVariants)
             ->whereIn('status', ['sold', 'used'])
@@ -337,6 +344,37 @@ class AutoDebitService
                 'eligible' => false,
                 'reason' => 'Voucher sebelumnya masih aktif/berlaku',
             ];
+        }
+
+        // PROTEKSI OPSI 1:
+        // Jika voucher terakhir kedaluwarsa dalam keadaan BELUM PERNAH digunakan sama sekali (used_at is null),
+        // tahan / pause auto-debit agar poin pelanggan tidak hangus sia-sia saat tidak berada di lokasi WiFi.
+        $phoneVariants = self::getPhoneVariants($account->phone);
+        $latestVoucher = Voucher::whereIn('customer_phone', $phoneVariants)
+            ->latest('id')
+            ->first();
+
+        if ($latestVoucher && empty($latestVoucher->used_at)) {
+            $isExpiredUnused = false;
+            if ($latestVoucher->status === 'expired') {
+                $isExpiredUnused = true;
+            } elseif ($latestVoucher->status === 'sold' && $latestVoucher->expires_at && $latestVoucher->expires_at->isPast()) {
+                $isExpiredUnused = true;
+            }
+
+            // Izinkan berjalan jika pelanggan secara sadar baru saja mengubah/menyimpan pengaturan Auto-Voucher
+            // setelah voucher tersebut kedaluwarsa
+            $userExplicitlyUpdatedAfter = $latestVoucher->updated_at 
+                && $account->updated_at 
+                && $account->updated_at->gt($latestVoucher->updated_at);
+
+            if ($isExpiredUnused && !$userExplicitlyUpdatedAfter) {
+                return [
+                    'eligible' => false,
+                    'reason' => 'Voucher sebelumnya kedaluwarsa tanpa digunakan (Auto-Voucher di-pause untuk menghemat poin)',
+                    'is_paused_unused' => true,
+                ];
+            }
         }
 
         // Prevent rapid re-debiting if it ran within the last 30 minutes

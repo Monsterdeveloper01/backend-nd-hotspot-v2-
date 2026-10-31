@@ -598,6 +598,8 @@ class PointCustomerController extends Controller
             return response()->json(['success' => false, 'message' => 'Akun tidak ditemukan.'], 404);
         }
 
+        $eligibility = AutoDebitService::isEligibleToRun($account);
+
         return response()->json([
             'success' => true,
             'auto_debit_enabled' => (bool) $account->auto_debit_enabled,
@@ -607,6 +609,8 @@ class PointCustomerController extends Controller
             'auto_debit_day' => (int) ($account->auto_debit_day ?: 1),
             'last_run_at' => $account->auto_debit_last_run_at ? $account->auto_debit_last_run_at->format('Y-m-d H:i:s') : null,
             'fail_count' => (int) $account->auto_debit_fail_count,
+            'is_paused_unused' => !empty($eligibility['is_paused_unused']),
+            'status_note' => $eligibility['reason'] ?? null,
         ]);
     }
 
