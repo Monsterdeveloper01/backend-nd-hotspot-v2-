@@ -149,10 +149,10 @@ class PointCustomerController extends Controller
         $validator = Validator::make($request->all(), [
             'phone' => 'required|string|min:8|max:25',
             'otp' => 'required|string|min:4|max:6',
-            'pin' => 'required|string|regex:/^[0-9]{6}$/',
+            'pin' => 'required|string|regex:/^[0-9]{4,6}$/',
             'action' => 'nullable|string|in:setup_pin,reset_pin',
         ], [
-            'pin.regex' => 'PIN harus terdiri dari 6 angka numerik.',
+            'pin.regex' => 'PIN harus terdiri dari 4 sampai 6 angka numerik.',
             'otp.required' => 'Kode OTP wajib diisi.',
         ]);
 
@@ -182,7 +182,7 @@ class PointCustomerController extends Controller
     {
         $validator = Validator::make($request->all(), [
             'phone' => 'required|string|min:8|max:25',
-            'pin' => 'required|string|regex:/^[0-9]{6}$/',
+            'pin' => 'required|string|regex:/^[0-9]{4,6}$/',
         ]);
 
         if ($validator->fails()) {
@@ -204,10 +204,10 @@ class PointCustomerController extends Controller
     {
         $validator = Validator::make($request->all(), [
             'phone' => 'required|string|min:8|max:25',
-            'pin' => 'required|string|regex:/^[0-9]{6}$/',
+            'pin' => 'required|string|regex:/^[0-9]{4,6}$/',
             'voucher_plan_id' => 'required|exists:voucher_plans,id',
         ], [
-            'pin.regex' => 'PIN harus terdiri dari 6 angka.',
+            'pin.regex' => 'PIN harus terdiri dari 4 sampai 6 angka.',
             'voucher_plan_id.exists' => 'Paket voucher yang dipilih tidak valid.',
         ]);
 
@@ -444,7 +444,7 @@ class PointCustomerController extends Controller
         $validator = Validator::make($request->all(), [
             'phone' => 'required|string|min:8|max:25',
             'package_id' => 'required|string',
-            'pin' => 'nullable|string|regex:/^[0-9]{6}$/',
+            'pin' => 'nullable|string|regex:/^[0-9]{4,6}$/',
         ]);
 
         if ($validator->fails()) {
@@ -623,13 +623,13 @@ class PointCustomerController extends Controller
     {
         $validator = Validator::make($request->all(), [
             'phone' => 'required|string|min:8|max:25',
-            'pin' => 'required|string|regex:/^[0-9]{6}$/',
+            'pin' => 'required|string|regex:/^[0-9]{4,6}$/',
             'enabled' => 'required|boolean',
             'voucher_plan_id' => 'nullable|exists:voucher_plans,id',
             'trigger_type' => 'nullable|string|in:on_expiry,monthly_date',
             'day' => 'nullable|integer|min:1|max:31',
         ], [
-            'pin.regex' => 'PIN harus terdiri dari 6 angka.',
+            'pin.regex' => 'PIN harus terdiri dari 4 sampai 6 angka.',
             'voucher_plan_id.exists' => 'Paket voucher pilihan tidak valid.',
             'trigger_type.in' => 'Pilihan jadwal ND Auto-Voucher tidak valid.',
             'day.min' => 'Tanggal perpanjangan minimal tanggal 1.',

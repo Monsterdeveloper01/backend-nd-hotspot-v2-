@@ -103,11 +103,11 @@ class PointSecurityService
             ];
         }
 
-        // Validate 6 digits PIN
-        if (!preg_match('/^[0-9]{6}$/', $pin)) {
+        // Validate 4 to 6 digits PIN
+        if (!preg_match('/^[0-9]{4,6}$/', $pin)) {
             return [
                 'success' => false,
-                'message' => 'PIN harus terdiri dari tepat 6 angka.',
+                'message' => 'PIN harus terdiri dari 4 sampai 6 angka.',
             ];
         }
 
