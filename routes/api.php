@@ -45,6 +45,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/logout', [AuthController::class, 'logout']);
 
     // Admin: Master Voucher Management
+    Route::post('/voucher-plans/sync-mikrotik', [VoucherPlanController::class, 'syncAllProfiles']);
     Route::post('/voucher-plans', [VoucherPlanController::class, 'store']);
     Route::put('/voucher-plans/{id}', [VoucherPlanController::class, 'update']);
     Route::delete('/voucher-plans/{id}', [VoucherPlanController::class, 'destroy']);

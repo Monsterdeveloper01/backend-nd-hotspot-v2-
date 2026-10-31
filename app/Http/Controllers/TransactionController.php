@@ -501,8 +501,13 @@ class TransactionController extends Controller
                         
                         \Log::info('MIKROTIK CREATE USER RESULT', ['result' => $mikrotikResult]);
 
-                        if (is_array($mikrotikResult) && isset($mikrotikResult[0]['.id'])) {
-                            $mikrotikId = $mikrotikResult[0]['.id'];
+                        $isSuccess = is_array($mikrotikResult) 
+                            && !isset($mikrotikResult['!trap']) 
+                            && !isset($mikrotikResult['type']) 
+                            && (isset($mikrotikResult[0]['ret']) || isset($mikrotikResult[0]['.id']) || !empty($mikrotikResult));
+
+                        if ($isSuccess) {
+                            $mikrotikId = $mikrotikResult[0]['ret'] ?? $mikrotikResult[0]['.id'] ?? 'created';
                         } else {
                             // Retry once if first attempt failed
                             \Log::warning('MikroTik user creation first attempt failed, retrying in 300ms...', [
@@ -517,12 +522,17 @@ class TransactionController extends Controller
                                 'limit_uptime' => $tx->plan->duration ?: '0',
                                 'comment' => "Voucher QRIS (Retry): {$voucherCode} ({$tx->customer_phone})"
                             ]);
-                            if (is_array($retryResult) && isset($retryResult[0]['.id'])) {
-                                $mikrotikId = $retryResult[0]['.id'];
+                            $isRetrySuccess = is_array($retryResult) 
+                                && !isset($retryResult['!trap']) 
+                                && !isset($retryResult['type']) 
+                                && (isset($retryResult[0]['ret']) || isset($retryResult[0]['.id']) || !empty($retryResult));
+
+                            if ($isRetrySuccess) {
+                                $mikrotikId = $retryResult[0]['ret'] ?? $retryResult[0]['.id'] ?? 'created';
                                 \Log::info('MikroTik user creation succeeded on retry', ['id' => $mikrotikId]);
                             } else {
-                                $errorDetail = is_array($retryResult) && isset($retryResult['!trap'])
-                                    ? json_encode($retryResult['!trap'])
+                                $errorDetail = is_array($retryResult) && (isset($retryResult['!trap']) || isset($retryResult['message']))
+                                    ? ($retryResult['message'] ?? json_encode($retryResult))
                                     : ($retryResult === false ? 'Koneksi ke MikroTik Gagal (Timeout/Offline/Port 8728)' : json_encode($retryResult));
 
                                 \Log::error('CRITICAL: MIKROTIK USER CREATION FAILED FOR QRIS VOUCHER', [
@@ -573,8 +583,9 @@ class TransactionController extends Controller
                                 'limit_uptime' => $tx->plan->duration ?: '0',
                                 'comment' => "Voucher QRIS Stock: {$voucher->code} ({$tx->customer_phone})"
                             ]);
-                            if (is_array($res) && isset($res[0]['.id'])) {
-                                $voucher->mikrotik_id = $res[0]['.id'];
+                            $isResOk = is_array($res) && !isset($res['!trap']) && !isset($res['type']) && (isset($res[0]['ret']) || isset($res[0]['.id']) || !empty($res));
+                            if ($isResOk) {
+                                $voucher->mikrotik_id = $res[0]['ret'] ?? $res[0]['.id'] ?? 'created';
                             }
                         }
                     }
@@ -687,8 +698,10 @@ class TransactionController extends Controller
                             'limit_uptime' => $transaction->plan?->duration ?: '0',
                             'comment' => "Self-Heal: {$transaction->voucher->code} ({$transaction->customer_phone})"
                         ]);
-                        if (is_array($res) && isset($res[0]['.id'])) {
-                            $transaction->voucher->update(['mikrotik_id' => $res[0]['.id']]);
+                        $isResOk = is_array($res) && !isset($res['!trap']) && !isset($res['type']) && (isset($res[0]['ret']) || isset($res[0]['.id']) || !empty($res));
+                        if ($isResOk) {
+                            $resId = $res[0]['ret'] ?? $res[0]['.id'] ?? 'created';
+                            $transaction->voucher->update(['mikrotik_id' => $resId]);
                             \Log::info('Voucher auto-injected to MikroTik on getVoucherByOrder', ['code' => $transaction->voucher->code]);
                         }
                     }

@@ -122,4 +122,13 @@ class VoucherPlanController extends Controller
 
         return response()->json(['message' => 'Master Voucher berhasil dihapus']);
     }
+
+    /**
+     * Sync all Master Voucher plans to MikroTik Hotspot User Profiles.
+     */
+    public function syncAllProfiles()
+    {
+        $result = $this->mikrotik->syncAllProfiles();
+        return response()->json($result);
+    }
 }

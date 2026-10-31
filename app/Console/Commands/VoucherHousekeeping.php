@@ -173,8 +173,10 @@ class VoucherHousekeeping extends Command
                             'limit_uptime' => $sv->plan?->duration ?: '0',
                             'comment' => "ND-AUTOHEAL: {$sv->code} ({$sv->customer_phone})"
                         ]);
-                        if (is_array($res) && isset($res[0]['.id'])) {
-                            $sv->update(['mikrotik_id' => $res[0]['.id']]);
+                        $isResOk = is_array($res) && !isset($res['!trap']) && !isset($res['type']) && (isset($res[0]['ret']) || isset($res[0]['.id']) || !empty($res));
+                        if ($isResOk) {
+                            $resId = $res[0]['ret'] ?? $res[0]['.id'] ?? 'created';
+                            $sv->update(['mikrotik_id' => $resId]);
                             $healedCount++;
                             $this->info("Berhasil meng-inject kembali voucher missing ke MikroTik: {$sv->code}");
                         }

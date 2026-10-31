@@ -340,9 +340,245 @@ class MikrotikService
         return $result;
     }
 
-    public function updateProfile($data)
+    /**
+     * Format upload and download limits into RouterOS rate-limit string (upload/download e.g. 5M/15M).
+     */
+    public function formatRateLimit($upload, $download): ?string
     {
+        $upload = trim((string)$upload);
+        $download = trim((string)$download);
+
+        if ($upload === '' && $download === '') {
+            return null;
+        }
+
+        $formatter = function($val) {
+            $val = trim((string)$val);
+            if ($val === '') return null;
+            if (is_numeric($val)) {
+                return $val . 'M';
+            }
+            return $val;
+        };
+
+        $up = $formatter($upload);
+        $down = $formatter($download);
+
+        if ($up && $down) {
+            return "{$up}/{$down}";
+        } elseif ($up) {
+            return "{$up}/{$up}";
+        } elseif ($down) {
+            return "{$down}/{$down}";
+        }
+
+        return null;
+    }
+
+    /**
+     * Get all Hotspot User Profiles from MikroTik (/ip/hotspot/user/profile).
+     */
+    public function getHotspotUserProfiles(): array
+    {
+        if (!$this->connect()) return [];
+        $profiles = $this->client->comm('/ip/hotspot/user/profile/print');
+        $this->disconnect();
+        return is_array($profiles) ? $profiles : [];
+    }
+
+    /**
+     * Create or ensure a Hotspot User Profile exists in MikroTik.
+     */
+    public function createProfile(array $data)
+    {
+        if (!$this->connect()) return false;
+
+        $profileName = trim($data['mikrotik_profile'] ?? '');
+        if (empty($profileName)) {
+            $profileName = str_replace(' ', '-', trim($data['name'] ?? 'default'));
+        }
+
+        $existing = $this->client->comm('/ip/hotspot/user/profile/print', [
+            '?name' => $profileName
+        ]);
+
+        $params = [
+            'name' => $profileName,
+            'shared-users' => (string)($data['shared_users'] ?? 1),
+        ];
+
+        $rateLimit = $this->formatRateLimit($data['upload_limit'] ?? null, $data['download_limit'] ?? null);
+        if ($rateLimit) {
+            $params['rate-limit'] = $rateLimit;
+        }
+
+        if (is_array($existing) && !empty($existing) && isset($existing[0]['.id'])) {
+            $params['.id'] = $existing[0]['.id'];
+            $result = $this->client->comm('/ip/hotspot/user/profile/set', $params);
+            Log::info("MikroTik profile '{$profileName}' updated.", ['params' => $params]);
+        } else {
+            $result = $this->client->comm('/ip/hotspot/user/profile/add', $params);
+            Log::info("MikroTik profile '{$profileName}' created.", ['params' => $params, 'result' => $result]);
+        }
+
+        $this->disconnect();
+
+        if (is_array($result) && (isset($result['!trap']) || (isset($result['type']) && $result['type'] === '!trap'))) {
+            Log::error("Failed to create/set profile '{$profileName}' in MikroTik", ['result' => $result]);
+            return false;
+        }
+
         return true;
+    }
+
+    /**
+     * Update an existing Hotspot User Profile in MikroTik.
+     */
+    public function updateProfile($oldProfileName, array $data = [])
+    {
+        if (is_array($oldProfileName) && empty($data)) {
+            $data = $oldProfileName;
+            $oldProfileName = $data['mikrotik_profile'] ?? $data['name'] ?? '';
+        }
+
+        if (!$this->connect()) return false;
+
+        $newProfileName = trim($data['mikrotik_profile'] ?? '');
+        if (empty($newProfileName)) {
+            $newProfileName = str_replace(' ', '-', trim($data['name'] ?? $oldProfileName));
+        }
+
+        $existing = $this->client->comm('/ip/hotspot/user/profile/print', [
+            '?name' => $oldProfileName
+        ]);
+
+        $params = [
+            'name' => $newProfileName,
+            'shared-users' => (string)($data['shared_users'] ?? 1),
+        ];
+
+        $rateLimit = $this->formatRateLimit($data['upload_limit'] ?? null, $data['download_limit'] ?? null);
+        if ($rateLimit) {
+            $params['rate-limit'] = $rateLimit;
+        }
+
+        if (is_array($existing) && !empty($existing) && isset($existing[0]['.id'])) {
+            $params['.id'] = $existing[0]['.id'];
+            $result = $this->client->comm('/ip/hotspot/user/profile/set', $params);
+            Log::info("MikroTik profile '{$oldProfileName}' updated to '{$newProfileName}'.", ['params' => $params]);
+        } else {
+            $result = $this->client->comm('/ip/hotspot/user/profile/add', $params);
+            Log::info("MikroTik profile '{$newProfileName}' created during update.", ['params' => $params]);
+        }
+
+        $this->disconnect();
+
+        if (is_array($result) && (isset($result['!trap']) || (isset($result['type']) && $result['type'] === '!trap'))) {
+            Log::error("Failed to update profile '{$newProfileName}' in MikroTik", ['result' => $result]);
+            return false;
+        }
+
+        return true;
+    }
+
+    /**
+     * Delete Hotspot User Profile from MikroTik.
+     */
+    public function deleteProfile($profileName)
+    {
+        $profileName = trim((string)$profileName);
+        if (empty($profileName) || strtolower($profileName) === 'default') {
+            return false;
+        }
+
+        if (!$this->connect()) return false;
+
+        $existing = $this->client->comm('/ip/hotspot/user/profile/print', [
+            '?name' => $profileName
+        ]);
+
+        if (is_array($existing) && !empty($existing) && isset($existing[0]['.id'])) {
+            $this->client->comm('/ip/hotspot/user/profile/remove', [
+                '.id' => $existing[0]['.id']
+            ]);
+            Log::info("MikroTik profile '{$profileName}' deleted.");
+        }
+
+        $this->disconnect();
+        return true;
+    }
+
+    /**
+     * Sync ALL Voucher Plans from Database into MikroTik User Profiles.
+     */
+    public function syncAllProfiles(): array
+    {
+        $plans = \App\Models\VoucherPlan::all();
+        if ($plans->isEmpty()) {
+            return ['success' => true, 'message' => 'Tidak ada paket voucher untuk disinkronkan.', 'synced' => 0];
+        }
+
+        if (!$this->connect()) {
+            return ['success' => false, 'message' => 'Gagal terhubung ke router MikroTik. Periksa IP/Port/Koneksi.', 'synced' => 0];
+        }
+
+        $this->beginBatch();
+        $synced = 0;
+        $failed = 0;
+        $errors = [];
+
+        try {
+            $rawProfiles = $this->client->comm('/ip/hotspot/user/profile/print');
+            $existingProfiles = [];
+            if (is_array($rawProfiles)) {
+                foreach ($rawProfiles as $p) {
+                    if (isset($p['name'])) {
+                        $existingProfiles[$p['name']] = $p;
+                    }
+                }
+            }
+
+            foreach ($plans as $plan) {
+                $profileName = $plan->mikrotik_profile ?: str_replace(' ', '-', $plan->name);
+                
+                $params = [
+                    'name' => $profileName,
+                    'shared-users' => (string)($plan->shared_users ?? 1),
+                ];
+
+                $rateLimit = $this->formatRateLimit($plan->upload_limit, $plan->download_limit);
+                if ($rateLimit) {
+                    $params['rate-limit'] = $rateLimit;
+                }
+
+                if (isset($existingProfiles[$profileName])) {
+                    $params['.id'] = $existingProfiles[$profileName]['.id'];
+                    $res = $this->client->comm('/ip/hotspot/user/profile/set', $params);
+                } else {
+                    $res = $this->client->comm('/ip/hotspot/user/profile/add', $params);
+                }
+
+                if (is_array($res) && (isset($res['!trap']) || (isset($res['type']) && $res['type'] === '!trap'))) {
+                    $failed++;
+                    $errMsg = $res['message'] ?? json_encode($res);
+                    $errors[] = "Profile {$profileName}: {$errMsg}";
+                    Log::error("Failed to sync profile {$profileName} to MikroTik: {$errMsg}");
+                } else {
+                    $synced++;
+                    Log::info("Profile {$profileName} synced to MikroTik successfully.");
+                }
+            }
+        } finally {
+            $this->endBatch();
+        }
+
+        return [
+            'success' => $failed === 0,
+            'message' => "Berhasil sinkronisasi {$synced} profile ke MikroTik" . ($failed > 0 ? " ({$failed} gagal)" : ''),
+            'synced' => $synced,
+            'failed' => $failed,
+            'errors' => $errors
+        ];
     }
 
     public function removeHotspotUser($username)
