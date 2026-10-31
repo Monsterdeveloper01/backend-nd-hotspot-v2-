@@ -37,6 +37,7 @@ Route::prefix('points')->middleware('throttle:120,1')->group(function () {
     Route::post('/topup/charge', [PointCustomerController::class, 'topupCharge']);
     Route::post('/autodebit/status', [PointCustomerController::class, 'getAutoDebit']);
     Route::post('/autodebit/toggle', [PointCustomerController::class, 'toggleAutoDebit']);
+    Route::post('/my-vouchers', [PointCustomerController::class, 'myVouchers']);
 });
 
 Route::middleware('auth:sanctum')->group(function () {

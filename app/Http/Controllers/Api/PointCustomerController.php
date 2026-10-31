@@ -281,6 +281,7 @@ class PointCustomerController extends Controller
                             'password' => '',
                             'profile' => $plan->mikrotik_profile ?: $plan->name,
                             'limit_uptime' => $plan->duration ?: '0',
+                            'comment' => "ND-POINTS: Exp 3 Hari ({$voucherCode})",
                         ]);
 
                         if (is_array($mikrotikResult) && isset($mikrotikResult[0]['.id'])) {
@@ -295,19 +296,31 @@ class PointCustomerController extends Controller
                         'status' => 'sold',
                         'customer_phone' => $normalizedPhone,
                         'mikrotik_id' => $mikrotikId,
+                        'expires_at' => now()->addDays(3),
                     ]);
                 } else {
-                    if (env('VOUCHER_MODE', 'radius') === 'mikrotik' && !$voucher->mikrotik_id) {
-                        $this->mikrotik->createUser([
-                            'username' => $voucher->code,
-                            'password' => '',
-                            'profile' => $plan->name,
-                            'limit_uptime' => $plan->duration ?: '0',
-                        ]);
+                    if (env('VOUCHER_MODE', 'radius') === 'mikrotik') {
+                        if (!$voucher->mikrotik_id) {
+                            $this->mikrotik->createUser([
+                                'username' => $voucher->code,
+                                'password' => '',
+                                'profile' => $plan->name,
+                                'limit_uptime' => $plan->duration ?: '0',
+                                'comment' => "ND-POINTS: Exp 3 Hari ({$voucher->code})",
+                            ]);
+                        } else {
+                            try {
+                                $this->mikrotik->comm('/ip/hotspot/user/set', [
+                                    '.id' => $voucher->mikrotik_id,
+                                    'comment' => "ND-POINTS: Exp 3 Hari ({$voucher->code})",
+                                ]);
+                            } catch (\Throwable $e) {}
+                        }
                     }
 
                     $voucher->status = 'sold';
                     $voucher->customer_phone = $normalizedPhone;
+                    $voucher->expires_at = now()->addDays(3);
                     $voucher->save();
                 }
 
@@ -358,13 +371,16 @@ class PointCustomerController extends Controller
                 $plan = $result['plan'];
                 $balanceAfterFormatted = number_format($result['balance_after'], 0, ',', '.');
                 $pointsSpentFormatted = number_format($result['points_spent'], 0, ',', '.');
+                $expFormatted = $voucher->expires_at ? $voucher->expires_at->translatedFormat('d M Y, H:i') : now()->addDays(3)->translatedFormat('d M Y, H:i');
 
                 $waMsg = "🎉 *VOUCHER BERHASIL DITUKAR (ND-POINTS)*\n\n"
                     . "Paket: *{$plan->name}*\n"
                     . "Kode Voucher: *{$voucher->code}*\n"
                     . "Durasi: *{$plan->duration}*\n"
                     . "Poin Terpotong: *{$pointsSpentFormatted} Poin*\n"
-                    . "Sisa Saldo Poin: *{$balanceAfterFormatted} Poin*\n\n"
+                    . "Sisa Saldo Poin: *{$balanceAfterFormatted} Poin*\n"
+                    . "⏳ *Masa Berlaku Voucher:* *3 HARI* (Kedaluwarsa: {$expFormatted} WIB)\n"
+                    . "⚠️ _Perhatian: Voucher poin ini memiliki batas waktu 3 hari. Segera gunakan sebelum kedaluwarsa & dihapus otomatis dari sistem MikroTik._\n\n"
                     . "🌐 *Login Otomatis:* \n"
                     . "http://ndnet.login/login?username={$voucher->code}&password=\n\n"
                     . "Terima kasih telah setia menggunakan layanan ND-Hotspot!";
@@ -385,6 +401,9 @@ class PointCustomerController extends Controller
                     'speed' => $result['plan']->speed_limit ?? 'Standard',
                     'points_spent' => $result['points_spent'],
                     'balance_remaining' => $result['balance_after'],
+                    'expires_at' => $result['voucher']->expires_at ? $result['voucher']->expires_at->translatedFormat('d M Y, H:i') : now()->addDays(3)->translatedFormat('d M Y, H:i'),
+                    'expiry_days' => 3,
+                    'expiry_notice' => 'Voucher poin berlaku 3 hari dan akan otomatis kedaluwarsa & dihapus jika tidak digunakan.',
                     'login_url' => "http://ndnet.login/login?username={$result['voucher']->code}&password=&dst=" . urlencode(env('APP_URL', 'https://nd-hostpot.net')),
                 ],
             ]);
@@ -679,9 +698,13 @@ class PointCustomerController extends Controller
                             $initialVoucher = [
                                 'voucher_code' => $voucher->code,
                                 'plan_name' => $account->autoDebitPlan->name ?? 'Paket Hotspot',
+                                'duration' => $account->autoDebitPlan->duration ?? '-',
                                 'points_spent' => $pointsRequired,
                                 'login_url' => 'http://ndnet.login/login?username=' . $voucher->code . '&password=',
                                 'balance_after' => (int) $account->balance,
+                                'expires_at' => $voucher->expires_at ? $voucher->expires_at->translatedFormat('d M Y, H:i') : now()->addDays(3)->translatedFormat('d M Y, H:i'),
+                                'expiry_days' => 3,
+                                'expiry_notice' => 'Voucher poin berlaku 3 hari dan akan otomatis kedaluwarsa & dihapus jika tidak digunakan.',
                             ];
                             $message = "⚡ ND Auto-Voucher aktif! Karena Anda belum memiliki voucher aktif, voucher pertama ({$voucher->code}) langsung diterbitkan dan dikirim ke WhatsApp Anda.";
                         }
@@ -704,6 +727,178 @@ class PointCustomerController extends Controller
             'auto_debit_trigger_type' => $account->auto_debit_trigger_type,
             'auto_debit_day' => $account->auto_debit_day,
             'initial_voucher' => $initialVoucher,
+        ]);
+    }
+
+    /**
+     * Get Customer's Vouchers (Active, Recent, and ND-Points Redeemed)
+     * Automatically cleans up expired vouchers so customer views real-time status.
+     */
+    public function myVouchers(Request $request)
+    {
+        $validator = Validator::make($request->all(), [
+            'phone' => 'required|string|min:8|max:25',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json(['success' => false, 'message' => $validator->errors()->first()], 422);
+        }
+
+        $phone = PhoneNumberService::normalize($request->input('phone')) ?? preg_replace('/[^0-9]/', '', $request->input('phone'));
+        $clean = str_starts_with($phone, '62') ? substr($phone, 2) : $phone;
+
+        // Phone variants for 100% accurate match across QRIS & Point systems
+        $variants = array_values(array_unique(array_filter([
+            $phone,
+            '0' . $clean,
+            '62' . $clean,
+            '+62' . $clean,
+            $clean,
+        ])));
+
+        $now = now();
+
+        // 1. Check & clean pending expired point vouchers for this customer
+        // HANYA voucher poin (atau reward) yang kedaluwarsa 3 hari, atau voucher used yang habis durasi
+        $expiredPending = Voucher::with(['transaction'])
+            ->whereIn('customer_phone', $variants)
+            ->whereIn('status', ['sold', 'used'])
+            ->whereNotNull('expires_at')
+            ->where('expires_at', '<', $now)
+            ->get();
+
+        if ($expiredPending->isNotEmpty()) {
+            try {
+                if (env('VOUCHER_MODE', 'radius') === 'mikrotik') {
+                    $this->mikrotik->beginBatch();
+                    foreach ($expiredPending as $expV) {
+                        // Jangan sentuh voucher QRIS biasa yang belum dipakai!
+                        if ($expV->status === 'sold' && !$expV->isPointVoucher() && $expV->source !== 'reward') {
+                            continue;
+                        }
+
+                        try {
+                            $this->mikrotik->removeAndCleanUser($expV->code);
+                        } catch (\Throwable $e) {}
+
+                        // PENTING: JANGAN DIHAPUS DARI DATABASE!
+                        // Cukup update status menjadi 'expired'
+                        $expV->update(['status' => 'expired']);
+                    }
+                    $this->mikrotik->endBatch();
+                } else {
+                    foreach ($expiredPending as $expV) {
+                        if ($expV->status === 'sold' && !$expV->isPointVoucher() && $expV->source !== 'reward') {
+                            continue;
+                        }
+                        $expV->update(['status' => 'expired']);
+                    }
+                }
+            } catch (\Throwable $me) {
+                foreach ($expiredPending as $expV) {
+                    if ($expV->status === 'sold' && !$expV->isPointVoucher() && $expV->source !== 'reward') {
+                        continue;
+                    }
+                    $expV->update(['status' => 'expired']);
+                }
+            }
+        }
+
+        // 2. Query vouchers for this customer
+        $vouchers = Voucher::with(['plan', 'transaction'])
+            ->where(function ($q) use ($variants) {
+                $q->whereIn('customer_phone', $variants)
+                  ->orWhereHas('transaction', function ($t) use ($variants) {
+                      $t->whereIn('customer_phone', $variants);
+                  });
+            })
+            ->orderBy('created_at', 'desc')
+            ->take(30)
+            ->get();
+
+        // 3. Map with informative badges and 3-day point expiration details
+        $mapped = $vouchers->map(function ($v) use ($now) {
+            $tx = $v->transaction;
+            $plan = $v->plan;
+
+            $isPoint = false;
+            $sourceType = 'qris';
+            $sourceLabel = 'QRIS Hotspot';
+
+            if ($tx) {
+                if ($tx->payment_type === 'nd_points_autodebit' || str_starts_with($tx->external_id ?? '', 'PTS-AUTODEBIT-')) {
+                    $isPoint = true;
+                    $sourceType = 'autodebit';
+                    $sourceLabel = 'ND Auto-Voucher';
+                } elseif ($tx->payment_type === 'nd_points' || str_starts_with($tx->external_id ?? '', 'PTS-REDEEM-')) {
+                    $isPoint = true;
+                    $sourceType = 'points';
+                    $sourceLabel = 'Tukar Poin';
+                }
+            } elseif ($v->source === 'reward') {
+                $sourceType = 'reward';
+                $sourceLabel = 'Reward Event';
+            }
+
+            // Expiration and usage determination
+            $status = $v->status;
+            $isExpired = false;
+            if ($status === 'expired') {
+                $isExpired = true;
+            } elseif ($v->status === 'sold') {
+                // Voucher QRIS biasa yang belum terpakai TIDAK PERNAH kedaluwarsa.
+                // HANYA voucher dari poin / reward yang memiliki masa berlaku 3 hari jika belum dipakai.
+                $isExpired = ($isPoint || $v->source === 'reward') && $v->expires_at && $v->expires_at->lt($now);
+            } elseif ($v->status === 'used') {
+                $isExpired = $v->expires_at && $v->expires_at->lt($now);
+            }
+
+            $statusLabel = 'Siap Digunakan';
+            $statusColor = 'emerald';
+            if ($isExpired) {
+                $statusLabel = 'Kedaluwarsa';
+                $statusColor = 'rose';
+            } elseif ($status === 'used') {
+                $statusLabel = 'Sedang Digunakan';
+                $statusColor = 'blue';
+            }
+
+            $remainingSeconds = ($v->expires_at && !$isExpired) ? max(0, $now->diffInSeconds($v->expires_at, false)) : null;
+
+            return [
+                'id' => $v->id,
+                'code' => $v->code,
+                'plan_name' => $plan ? $plan->name : 'Paket Hotspot',
+                'duration' => $plan ? $plan->duration : '-',
+                'price' => (int) $v->price,
+                'status' => $status,
+                'is_expired' => $isExpired,
+                'status_label' => $statusLabel,
+                'status_color' => $statusColor,
+                'is_point' => $isPoint,
+                'source_type' => $sourceType,
+                'source_label' => $sourceLabel,
+                'used_at' => $v->used_at ? $v->used_at->format('Y-m-d H:i:s') : null,
+                'expires_at' => $v->expires_at ? $v->expires_at->format('Y-m-d H:i:s') : null,
+                'expires_at_formatted' => $v->expires_at ? $v->expires_at->translatedFormat('d M Y, H:i') : null,
+                'created_at' => $v->created_at ? $v->created_at->format('Y-m-d H:i:s') : null,
+                'created_at_formatted' => $v->created_at ? $v->created_at->translatedFormat('d M Y, H:i') : null,
+                'remaining_seconds' => $remainingSeconds,
+                'is_three_day_point_rule' => $isPoint,
+                'login_url' => 'http://ndnet.login/login?username=' . $v->code . '&password=',
+            ];
+        });
+
+        // Current active voucher (most recent unexpired sold/used)
+        $activeVoucher = $mapped->first(function ($v) {
+            return !$v['is_expired'] && in_array($v['status'], ['sold', 'used']);
+        });
+
+        return response()->json([
+            'success' => true,
+            'active_voucher' => $activeVoucher,
+            'vouchers' => $mapped,
+            'total' => $mapped->count(),
         ]);
     }
 }

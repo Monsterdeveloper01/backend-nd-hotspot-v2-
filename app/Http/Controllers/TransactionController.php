@@ -502,7 +502,8 @@ class TransactionController extends Controller
                         'price' => $tx->plan->price,
                         'status' => 'sold',
                         'customer_phone' => $tx->customer_phone,
-                        'mikrotik_id' => $mikrotikId
+                        'mikrotik_id' => $mikrotikId,
+                        'expires_at' => null, // Voucher QRIS biasa tidak memiliki batas kedaluwarsa 3 hari
                     ]);
                     \Log::info('NEW VOUCHER GENERATED', ['code' => $voucherCode]);
                 } else {
@@ -518,6 +519,7 @@ class TransactionController extends Controller
                     
                     $voucher->status = 'sold';
                     $voucher->customer_phone = $tx->customer_phone;
+                    $voucher->expires_at = null; // Pastikan null agar voucher QRIS tidak terpengaruh batas 3 hari
                     $voucher->save();
                     \Log::info('VOUCHER FROM STOCK ASSIGNED', ['code' => $voucher->code]);
                 }

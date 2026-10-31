@@ -83,18 +83,31 @@ class VoucherHousekeeping extends Command
                     }
                 }
 
-                // LOGIKA B: Hapus Jika Sudah Kedaluwarsa
-                $isExpired = ($voucher->expires_at && $voucher->expires_at < $now);
+                // LOGIKA B: Hapus Dari MikroTik Jika Sudah Kedaluwarsa
+                // Perhatian: Voucher QRIS biasa yang belum terpakai (status sold) TIDAK memiliki batas kedaluwarsa 3 hari.
+                // Batas 3 hari HANYA berlaku untuk voucher yang dibeli menggunakan ND-Points (atau reward).
+                $isPointOrReward = $voucher->isPointVoucher() || $voucher->source === 'reward';
+                $isExpired = false;
+
+                if ($voucher->status === 'sold') {
+                    // Jika belum dipakai, HANYA kedaluwarsa jika berasal dari poin/reward dan expires_at sudah lewat
+                    $isExpired = $isPointOrReward && $voucher->expires_at && $voucher->expires_at < $now;
+                } elseif ($voucher->status === 'used') {
+                    // Jika sudah dipakai, kedaluwarsa saat limit waktu paketnya habis
+                    $isExpired = ($voucher->expires_at && $voucher->expires_at < $now);
+                }
+
                 $shouldBeDeleted = ($isExpired || in_array($voucher->status, ['expired', 'archive']));
 
                 if ($shouldBeDeleted) {
-                    $this->info("Menghapus voucher kedaluwarsa dari MikroTik: {$code}");
+                    $this->info("Menghapus user voucher kedaluwarsa dari MikroTik: {$code}");
                     
                     try {
-                        // Single combined call instead of 3 separate connections
+                        // HAPUS HANYA DARI MIKROTIK
                         $this->mikrotik->removeAndCleanUser($code);
 
-                        // Update status di DB jika belum 'expired'
+                        // PENTING: JANGAN PERNAH HAPUS DARI DATABASE!
+                        // Cukup ubah status di DB menjadi 'expired' untuk rekam jejak
                         if ($voucher->status !== 'expired') {
                             $voucher->update(['status' => 'expired']);
                             if ($voucher->source === 'reward') {
@@ -103,10 +116,44 @@ class VoucherHousekeeping extends Command
                                     ->update(['status' => 'expired']);
                             }
                         }
-                        $this->info("Voucher {$code} berhasil dibersihkan.");
+                        $this->info("User MikroTik {$code} dibersihkan, status DB diset 'expired'.");
                     } catch (\Exception $e) {
-                        $this->error("Gagal membersihkan {$code}: " . $e->getMessage());
+                        $this->error("Gagal membersihkan user MikroTik {$code}: " . $e->getMessage());
                     }
+                }
+            }
+
+            // 2. Bersihkan voucher poin kedaluwarsa di database yang belum terhapus dari MikroTik
+            // HANYA untuk voucher poin (atau reward) batas 3 hari, atau voucher used yang sudah habis masa aktifnya.
+            // Voucher QRIS biasa yang belum terpakai (sold) TIDAK PERNAH dikadaluarsakan di sini!
+            $dbExpired = Voucher::with(['transaction'])
+                ->whereIn('status', ['sold', 'used'])
+                ->whereNotNull('expires_at')
+                ->where('expires_at', '<', $now)
+                ->get();
+
+            if ($dbExpired->isNotEmpty()) {
+                $this->info("Menemukan {$dbExpired->count()} voucher calon kedaluwarsa di database. Memeriksa...");
+                foreach ($dbExpired as $expV) {
+                    // Voucher QRIS biasa yang belum terpakai TIDAK BOLEH dikadaluarsakan!
+                    if ($expV->status === 'sold' && !$expV->isPointVoucher() && $expV->source !== 'reward') {
+                        continue;
+                    }
+
+                    try {
+                        // Hapus user di MikroTik saja
+                        $this->mikrotik->removeAndCleanUser($expV->code);
+                    } catch (\Throwable $e) {}
+
+                    // PENTING: JANGAN DIHAPUS DI DATABASE!
+                    // Cukup update status menjadi 'expired'
+                    $expV->update(['status' => 'expired']);
+                    if ($expV->source === 'reward') {
+                        \App\Models\EventReward::where('voucher_id', $expV->id)
+                            ->whereIn('status', ['issued', 'processing'])
+                            ->update(['status' => 'expired']);
+                    }
+                    $this->info("User MikroTik {$expV->code} dihapus & status DB diupdate ke 'expired'. Record database tetap tersimpan.");
                 }
             }
 

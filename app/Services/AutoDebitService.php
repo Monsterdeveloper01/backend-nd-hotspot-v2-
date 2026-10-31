@@ -112,6 +112,7 @@ class AutoDebitService
                             'password' => '',
                             'profile' => $plan->mikrotik_profile ?: $plan->name,
                             'limit_uptime' => $plan->duration ?: '0',
+                            'comment' => "ND-AUTOVOUCHER: Exp 3 Hari ({$voucherCode})",
                         ]);
 
                         if (is_array($mikrotikResult) && isset($mikrotikResult[0]['.id'])) {
@@ -126,19 +127,31 @@ class AutoDebitService
                         'status' => 'sold',
                         'customer_phone' => $acc->phone,
                         'mikrotik_id' => $mikrotikId,
+                        'expires_at' => now()->addDays(3),
                     ]);
                 } else {
-                    if (env('VOUCHER_MODE', 'radius') === 'mikrotik' && !$voucher->mikrotik_id) {
-                        $mikrotikService->createUser([
-                            'username' => $voucher->code,
-                            'password' => '',
-                            'profile' => $plan->name,
-                            'limit_uptime' => $plan->duration ?: '0',
-                        ]);
+                    if (env('VOUCHER_MODE', 'radius') === 'mikrotik') {
+                        if (!$voucher->mikrotik_id) {
+                            $mikrotikService->createUser([
+                                'username' => $voucher->code,
+                                'password' => '',
+                                'profile' => $plan->name,
+                                'limit_uptime' => $plan->duration ?: '0',
+                                'comment' => "ND-AUTOVOUCHER: Exp 3 Hari ({$voucher->code})",
+                            ]);
+                        } else {
+                            try {
+                                $mikrotikService->comm('/ip/hotspot/user/set', [
+                                    '.id' => $voucher->mikrotik_id,
+                                    'comment' => "ND-AUTOVOUCHER: Exp 3 Hari ({$voucher->code})",
+                                ]);
+                            } catch (\Throwable $e) {}
+                        }
                     }
 
                     $voucher->status = 'sold';
                     $voucher->customer_phone = $acc->phone;
+                    $voucher->expires_at = now()->addDays(3);
                     $voucher->save();
                 }
 
@@ -184,13 +197,16 @@ class AutoDebitService
                 $voucher = $result['voucher'];
                 $balFormatted = number_format($result['balance_after'], 0, ',', '.');
                 $ptsFormatted = number_format($pointsRequired, 0, ',', '.');
+                $expFormatted = $voucher->expires_at ? $voucher->expires_at->translatedFormat('d M Y, H:i') : now()->addDays(3)->translatedFormat('d M Y, H:i');
 
                 $msg = "⚡ *ND AUTO-VOUCHER ND-HOTSPOT BERHASIL!*\n\n"
                     . "Paket: *{$plan->name}*\n"
                     . "Durasi: *{$plan->duration}*\n"
                     . "Kode Voucher: *{$voucher->code}*\n"
                     . "Poin Terpotong: *{$ptsFormatted} Pts*\n"
-                    . "Sisa Saldo Poin: *{$balFormatted} Poin*\n\n"
+                    . "Sisa Saldo Poin: *{$balFormatted} Poin*\n"
+                    . "⏳ *Masa Berlaku Voucher:* *3 HARI* (Kedaluwarsa: {$expFormatted} WIB)\n"
+                    . "⚠️ _Perhatian: Voucher ini memiliki batas waktu 3 hari. Segera gunakan sebelum kedaluwarsa & dihapus otomatis dari sistem MikroTik._\n\n"
                     . "🌐 *Login Otomatis:* \n"
                     . "http://ndnet.login/login?username={$voucher->code}&password=\n\n"
                     . "Layanan internet Anda telah diperpanjang otomatis secara instan via ND Auto-Voucher. Terima kasih!";
