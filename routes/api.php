@@ -107,6 +107,7 @@ Route::middleware('auth:sanctum')->group(function () {
 
     // Admin: System Config
     Route::post('/maintenance/toggle', [\App\Http\Controllers\Api\SystemConfigController::class, 'toggleMaintenance']);
+    Route::post('/maintenance/points/toggle', [\App\Http\Controllers\Api\SystemConfigController::class, 'togglePointMaintenance']);
 
     // Admin: WhatsApp Bot Complaints
     Route::get('/admin/complaints', [WhatsAppBotController::class, 'getComplaints']);
@@ -149,6 +150,7 @@ Route::middleware('auth:sanctum')->group(function () {
 // Public: System Config & Tracking
 Route::get('/maintenance/status', [\App\Http\Controllers\Api\SystemConfigController::class, 'getStatus']);
 Route::post('/maintenance/bypass', [\App\Http\Controllers\Api\SystemConfigController::class, 'verifyBypass'])->middleware('throttle:10,1');
+Route::post('/maintenance/points/bypass', [\App\Http\Controllers\Api\SystemConfigController::class, 'verifyPointBypass'])->middleware('throttle:10,1');
 Route::post('/log-visit', [\App\Http\Controllers\Api\AnalyticsController::class, 'logVisit']);
 
 // Public Customer Bill Lookup
