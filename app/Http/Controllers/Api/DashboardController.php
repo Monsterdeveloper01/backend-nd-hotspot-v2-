@@ -304,8 +304,8 @@ class DashboardController extends Controller
                   ->orWhere(function($sub) {
                       $sub->whereNotNull('voucher_plan_id')
                           ->where('external_id', 'not like', 'PTS-%')
-                          ->where('payment_type', '!=', 'nd_points')
-                          ->where('payment_type', '!=', 'nd_points_autodebit');
+                          ->where('payment_method', '!=', 'nd_points')
+                          ->where('payment_method', '!=', 'nd_points_autodebit');
                   });
             })->where('payment_method', '!=', 'qris_statis')
               ->where('external_id', 'not like', 'QRIS-%')
@@ -313,7 +313,7 @@ class DashboardController extends Controller
         } elseif ($request->filter === 'point_topup') {
             $query->where(function($q) {
                 $q->where('external_id', 'like', 'PTS-TOPUP-%')
-                  ->orWhere('payment_type', 'point_topup')
+                  ->orWhere('payment_method', 'point_topup')
                   ->orWhere(function($sub) {
                       $sub->where('external_id', 'like', 'PTS-%')
                           ->where('external_id', 'not like', 'PTS-REDEEM-%')
@@ -326,8 +326,8 @@ class DashboardController extends Controller
                 $q->where('external_id', 'like', 'PTS-REDEEM-%')
                   ->orWhere('external_id', 'like', 'PTS-VOUCHER-%')
                   ->orWhere('external_id', 'like', 'PTS-AUTODEBIT-%')
-                  ->orWhere('payment_type', 'nd_points')
-                  ->orWhere('payment_type', 'nd_points_autodebit');
+                  ->orWhere('payment_method', 'nd_points')
+                  ->orWhere('payment_method', 'nd_points_autodebit');
             });
         } elseif ($request->filter === 'qris') {
             $query->where(function($q) {

@@ -428,7 +428,7 @@ class TransactionController extends Controller
                     ]);
 
                     $tx->status = 'success';
-                    $tx->payment_type = 'point_topup';
+                    $tx->payment_method = 'point_topup';
                     $tx->save();
 
                     // Send WhatsApp Notification for Top-Up
