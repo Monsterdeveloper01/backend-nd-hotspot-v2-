@@ -382,7 +382,8 @@ class PointCustomerController extends Controller
                     . "⏳ *Masa Berlaku Voucher:* *3 HARI* (Kedaluwarsa: {$expFormatted} WIB)\n"
                     . "⚠️ _Perhatian: Voucher poin ini memiliki batas waktu 3 hari. Segera gunakan sebelum kedaluwarsa & voucher otomatis terhapus._\n\n"
                     . "🌐 *Login Otomatis:* \n"
-                    . "http://ndnet.login/login?username={$voucher->code}&password=\n\n"
+                    . "http://ndnet.login/login?username={$voucher->code}&password=\n"
+                    . "_(Pastikan terhubung ke WiFi ND-Hotspot. Jika link belum bisa dipencet, balas chat ini atau simpan kontak ini)_\n\n"
                     . "Terima kasih telah setia menggunakan layanan ND-Hotspot!";
 
                 app(WhatsAppService::class)->sendMessage($normalizedPhone, $waMsg, 'Tukar Poin Voucher');
