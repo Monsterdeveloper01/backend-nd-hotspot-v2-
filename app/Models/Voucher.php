@@ -48,13 +48,14 @@ class Voucher extends Model
     public function isPointVoucher(): bool
     {
         if ($this->relationLoaded('transaction') && $this->transaction) {
-            return in_array($this->transaction->payment_type, ['nd_points', 'nd_points_autodebit'])
+            $method = $this->transaction->payment_method ?? $this->transaction->payment_type ?? '';
+            return in_array($method, ['nd_points', 'nd_points_autodebit'])
                 || str_starts_with($this->transaction->external_id ?? '', 'PTS-');
         }
 
         return $this->transaction()
             ->where(function ($q) {
-                $q->whereIn('payment_type', ['nd_points', 'nd_points_autodebit'])
+                $q->whereIn('payment_method', ['nd_points', 'nd_points_autodebit'])
                   ->orWhere('external_id', 'LIKE', 'PTS-%');
             })
             ->exists();

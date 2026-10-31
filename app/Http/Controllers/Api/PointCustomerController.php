@@ -331,7 +331,7 @@ class PointCustomerController extends Controller
                     'voucher_plan_id' => $plan->id,
                     'customer_phone' => $normalizedPhone,
                     'amount' => 0,
-                    'payment_type' => 'nd_points',
+                    'payment_method' => 'nd_points',
                     'status' => 'success',
                     'voucher_id' => $voucher->id,
                 ]);
@@ -545,7 +545,7 @@ class PointCustomerController extends Controller
                 'external_id' => $orderId,
                 'customer_phone' => $normalizedPhone,
                 'amount' => $amount,
-                'payment_type' => 'point_topup',
+                'payment_method' => 'point_topup',
                 'status' => 'pending',
                 'qr_string' => $qrString,
                 'snap_token' => $qrisUrl,
@@ -827,11 +827,12 @@ class PointCustomerController extends Controller
             $sourceLabel = 'QRIS Hotspot';
 
             if ($tx) {
-                if ($tx->payment_type === 'nd_points_autodebit' || str_starts_with($tx->external_id ?? '', 'PTS-AUTODEBIT-')) {
+                $method = $tx->payment_method ?? $tx->payment_type ?? '';
+                if ($method === 'nd_points_autodebit' || str_starts_with($tx->external_id ?? '', 'PTS-AUTODEBIT-')) {
                     $isPoint = true;
                     $sourceType = 'autodebit';
                     $sourceLabel = 'ND Auto-Voucher';
-                } elseif ($tx->payment_type === 'nd_points' || str_starts_with($tx->external_id ?? '', 'PTS-REDEEM-')) {
+                } elseif ($method === 'nd_points' || str_starts_with($tx->external_id ?? '', 'PTS-REDEEM-')) {
                     $isPoint = true;
                     $sourceType = 'points';
                     $sourceLabel = 'Tukar Poin';

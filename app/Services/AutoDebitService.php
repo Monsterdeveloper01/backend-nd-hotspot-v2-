@@ -161,7 +161,7 @@ class AutoDebitService
                     'voucher_plan_id' => $plan->id,
                     'customer_phone' => $acc->phone,
                     'amount' => 0,
-                    'payment_type' => 'nd_points_autodebit',
+                    'payment_method' => 'nd_points_autodebit',
                     'status' => 'success',
                     'voucher_id' => $voucher->id,
                 ]);
