@@ -811,7 +811,7 @@ class PointCustomerController extends Controller
             }
         }
 
-        // 2. Query vouchers for this customer
+        // 2. Query vouchers for this customer (Hanya 10 voucher terbaru)
         $vouchers = Voucher::with(['plan', 'transaction'])
             ->where(function ($q) use ($variants) {
                 $q->whereIn('customer_phone', $variants)
@@ -820,7 +820,7 @@ class PointCustomerController extends Controller
                   });
             })
             ->orderBy('created_at', 'desc')
-            ->take(30)
+            ->take(10)
             ->get();
 
         // 3. Map with informative badges and 3-day point expiration details
