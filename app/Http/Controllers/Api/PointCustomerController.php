@@ -380,7 +380,7 @@ class PointCustomerController extends Controller
                     . "Poin Terpotong: *{$pointsSpentFormatted} Poin*\n"
                     . "Sisa Saldo Poin: *{$balanceAfterFormatted} Poin*\n"
                     . "⏳ *Masa Berlaku Voucher:* *3 HARI* (Kedaluwarsa: {$expFormatted} WIB)\n"
-                    . "⚠️ _Perhatian: Voucher poin ini memiliki batas waktu 3 hari. Segera gunakan sebelum kedaluwarsa & dihapus otomatis dari sistem MikroTik._\n\n"
+                    . "⚠️ _Perhatian: Voucher poin ini memiliki batas waktu 3 hari. Segera gunakan sebelum kedaluwarsa & voucher otomatis terhapus._\n\n"
                     . "🌐 *Login Otomatis:* \n"
                     . "http://ndnet.login/login?username={$voucher->code}&password=\n\n"
                     . "Terima kasih telah setia menggunakan layanan ND-Hotspot!";
