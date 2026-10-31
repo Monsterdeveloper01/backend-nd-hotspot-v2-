@@ -108,7 +108,8 @@ class AutoDebitService
                     } while (Voucher::where('code', $voucherCode)->exists());
                     $mikrotikId = null;
 
-                    if (env('VOUCHER_MODE', 'radius') === 'mikrotik') {
+                    $voucherMode = config('mikrotik.voucher_mode', env('VOUCHER_MODE', 'mikrotik'));
+                    if ($voucherMode === 'mikrotik') {
                         $mikrotikResult = $mikrotikService->createUser([
                             'username' => $voucherCode,
                             'password' => '',
@@ -132,12 +133,13 @@ class AutoDebitService
                         'expires_at' => now()->addDays(3),
                     ]);
                 } else {
-                    if (env('VOUCHER_MODE', 'radius') === 'mikrotik') {
+                    $voucherMode = config('mikrotik.voucher_mode', env('VOUCHER_MODE', 'mikrotik'));
+                    if ($voucherMode === 'mikrotik') {
                         if (!$voucher->mikrotik_id) {
                             $mikrotikService->createUser([
                                 'username' => $voucher->code,
                                 'password' => '',
-                                'profile' => $plan->name,
+                                'profile' => $plan->mikrotik_profile ?: $plan->name,
                                 'limit_uptime' => $plan->duration ?: '0',
                                 'comment' => "ND-AUTOVOUCHER: Exp 3 Hari ({$voucher->code})",
                             ]);

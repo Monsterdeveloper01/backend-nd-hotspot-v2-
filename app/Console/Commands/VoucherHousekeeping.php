@@ -157,6 +157,36 @@ class VoucherHousekeeping extends Command
                 }
             }
 
+            // 3. AUTO-HEAL: Pastikan semua voucher berstatus 'sold' yang aktif di database sudah ter-inject ke MikroTik!
+            $soldVouchers = Voucher::where('status', 'sold')->with('plan')->get();
+            $mikrotikUsernames = collect($allMikrotikUsers)->pluck('name')->flip();
+            $healedCount = 0;
+
+            foreach ($soldVouchers as $sv) {
+                if (!$mikrotikUsernames->has($sv->code)) {
+                    $profile = $sv->plan?->mikrotik_profile ?: $sv->plan?->name ?: 'default';
+                    try {
+                        $res = $this->mikrotik->createUser([
+                            'username' => $sv->code,
+                            'password' => '',
+                            'profile' => $profile,
+                            'limit_uptime' => $sv->plan?->duration ?: '0',
+                            'comment' => "ND-AUTOHEAL: {$sv->code} ({$sv->customer_phone})"
+                        ]);
+                        if (is_array($res) && isset($res[0]['.id'])) {
+                            $sv->update(['mikrotik_id' => $res[0]['.id']]);
+                            $healedCount++;
+                            $this->info("Berhasil meng-inject kembali voucher missing ke MikroTik: {$sv->code}");
+                        }
+                    } catch (\Throwable $he) {
+                        $this->error("Gagal auto-heal voucher {$sv->code}: " . $he->getMessage());
+                    }
+                }
+            }
+            if ($healedCount > 0) {
+                $this->info("Auto-heal selesai. {$healedCount} voucher yang sempat hilang telah berhasil di-inject ke MikroTik.");
+            }
+
             $this->info("Housekeeping selesai.");
         } finally {
             // ALWAYS close the connection, even if an exception occurred

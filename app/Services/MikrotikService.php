@@ -21,12 +21,12 @@ class MikrotikService
     public function __construct()
     {
         $this->config = [
-            'host'          => env('MIKROTIK_HOST', '127.0.0.1'),
-            'fallback_host' => env('MIKROTIK_FALLBACK_HOST'),
-            'user'          => env('MIKROTIK_USERNAME', 'admin'),
-            'pass'          => env('MIKROTIK_PASSWORD', ''),
-            'port'          => (int) env('MIKROTIK_PORT', 8728),
-            'timeout'       => self::CONNECT_TIMEOUT,
+            'host'          => config('mikrotik.host', env('MIKROTIK_HOST', '127.0.0.1')),
+            'fallback_host' => config('mikrotik.fallback_host', env('MIKROTIK_FALLBACK_HOST')),
+            'user'          => config('mikrotik.user', env('MIKROTIK_USERNAME', 'admin')),
+            'pass'          => config('mikrotik.pass', env('MIKROTIK_PASSWORD', '')),
+            'port'          => (int) config('mikrotik.port', env('MIKROTIK_PORT', 8728)),
+            'timeout'       => config('mikrotik.timeout', self::CONNECT_TIMEOUT),
         ];
     }
 

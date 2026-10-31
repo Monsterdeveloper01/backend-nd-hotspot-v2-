@@ -481,20 +481,71 @@ class TransactionController extends Controller
                     } while (Voucher::where('code', $voucherCode)->exists());
                     
                     $mikrotikId = null;
-                    if (env('VOUCHER_MODE', 'radius') === 'mikrotik') {
-                        \Log::info('ATTEMPTING TO CREATE MIKROTIK USER', ['username' => $voucherCode, 'profile' => $tx->plan->mikrotik_profile]);
+                    $voucherMode = config('mikrotik.voucher_mode', env('VOUCHER_MODE', 'mikrotik'));
+
+                    if ($voucherMode === 'mikrotik') {
+                        $profileName = $tx->plan->mikrotik_profile ?: $tx->plan->name;
+                        \Log::info('ATTEMPTING TO CREATE MIKROTIK USER FOR QRIS VOUCHER', [
+                            'username' => $voucherCode,
+                            'profile' => $profileName,
+                            'order_id' => $orderId
+                        ]);
                         
                         $mikrotikResult = $this->mikrotik->createUser([
                             'username' => $voucherCode,
                             'password' => '', 
-                            'profile' => $tx->plan->mikrotik_profile,
-                            'limit_uptime' => $tx->plan->duration ?: '0'
+                            'profile' => $profileName,
+                            'limit_uptime' => $tx->plan->duration ?: '0',
+                            'comment' => "Voucher QRIS: {$voucherCode} ({$tx->customer_phone})"
                         ]);
                         
                         \Log::info('MIKROTIK CREATE USER RESULT', ['result' => $mikrotikResult]);
 
                         if (is_array($mikrotikResult) && isset($mikrotikResult[0]['.id'])) {
                             $mikrotikId = $mikrotikResult[0]['.id'];
+                        } else {
+                            // Retry once if first attempt failed
+                            \Log::warning('MikroTik user creation first attempt failed, retrying in 300ms...', [
+                                'code' => $voucherCode,
+                                'result' => $mikrotikResult
+                            ]);
+                            usleep(300000);
+                            $retryResult = $this->mikrotik->createUser([
+                                'username' => $voucherCode,
+                                'password' => '', 
+                                'profile' => $profileName,
+                                'limit_uptime' => $tx->plan->duration ?: '0',
+                                'comment' => "Voucher QRIS (Retry): {$voucherCode} ({$tx->customer_phone})"
+                            ]);
+                            if (is_array($retryResult) && isset($retryResult[0]['.id'])) {
+                                $mikrotikId = $retryResult[0]['.id'];
+                                \Log::info('MikroTik user creation succeeded on retry', ['id' => $mikrotikId]);
+                            } else {
+                                $errorDetail = is_array($retryResult) && isset($retryResult['!trap'])
+                                    ? json_encode($retryResult['!trap'])
+                                    : ($retryResult === false ? 'Koneksi ke MikroTik Gagal (Timeout/Offline/Port 8728)' : json_encode($retryResult));
+
+                                \Log::error('CRITICAL: MIKROTIK USER CREATION FAILED FOR QRIS VOUCHER', [
+                                    'order_id' => $orderId,
+                                    'voucher_code' => $voucherCode,
+                                    'profile' => $profileName,
+                                    'error' => $errorDetail
+                                ]);
+
+                                IncidentLoggerService::report(
+                                    'mikrotik',
+                                    'critical',
+                                    'Voucher QRIS Gagal Terbit di MikroTik',
+                                    "Pelanggan {$tx->customer_phone} sukses bayar QRIS Order [{$orderId}], namun voucher {$voucherCode} gagal dibuat di MikroTik Router: {$errorDetail}",
+                                    [
+                                        'order_id' => $orderId,
+                                        'voucher_code' => $voucherCode,
+                                        'phone' => $tx->customer_phone,
+                                        'profile' => $profileName,
+                                        'error' => $errorDetail
+                                    ]
+                                );
+                            }
                         }
                     }
 
@@ -507,23 +558,32 @@ class TransactionController extends Controller
                         'mikrotik_id' => $mikrotikId,
                         'expires_at' => null, // Voucher QRIS biasa tidak memiliki batas kedaluwarsa 3 hari
                     ]);
-                    \Log::info('NEW VOUCHER GENERATED', ['code' => $voucherCode]);
+                    \Log::info('NEW VOUCHER GENERATED', ['code' => $voucherCode, 'mikrotik_id' => $mikrotikId]);
                 } else {
-                    // If using existing stock, check if we need to inject into Mikrotik
-                    if (env('VOUCHER_MODE', 'radius') === 'mikrotik' && !$voucher->mikrotik_id) {
-                        $this->mikrotik->createUser([
-                            'username' => $voucher->code,
-                            'password' => '', 
-                            'profile' => $tx->plan->name,
-                            'limit_uptime' => $tx->plan->duration ?: '0'
-                        ]);
+                    // If using existing stock, ensure user exists in MikroTik
+                    $voucherMode = config('mikrotik.voucher_mode', env('VOUCHER_MODE', 'mikrotik'));
+                    if ($voucherMode === 'mikrotik') {
+                        $profileName = $tx->plan->mikrotik_profile ?: $tx->plan->name;
+                        $existingUser = $this->mikrotik->getHotspotUserDetailed($voucher->code);
+                        if (!$existingUser) {
+                            $res = $this->mikrotik->createUser([
+                                'username' => $voucher->code,
+                                'password' => '', 
+                                'profile' => $profileName,
+                                'limit_uptime' => $tx->plan->duration ?: '0',
+                                'comment' => "Voucher QRIS Stock: {$voucher->code} ({$tx->customer_phone})"
+                            ]);
+                            if (is_array($res) && isset($res[0]['.id'])) {
+                                $voucher->mikrotik_id = $res[0]['.id'];
+                            }
+                        }
                     }
                     
                     $voucher->status = 'sold';
                     $voucher->customer_phone = $tx->customer_phone;
                     $voucher->expires_at = null; // Pastikan null agar voucher QRIS tidak terpengaruh batas 3 hari
                     $voucher->save();
-                    \Log::info('VOUCHER FROM STOCK ASSIGNED', ['code' => $voucher->code]);
+                    \Log::info('VOUCHER FROM STOCK ASSIGNED', ['code' => $voucher->code, 'mikrotik_id' => $voucher->mikrotik_id]);
                 }
 
                 $tx->status = 'success';
@@ -610,6 +670,32 @@ class TransactionController extends Controller
         if (!$transaction || !$transaction->voucher) {
             \Log::warning('POLLING VOUCHER NOT FOUND YET', ['order_id' => $orderId]);
             return response()->json(['message' => 'Voucher not found or payment pending'], 404);
+        }
+
+        // Self-Healing: Jika voucher belum ter-inject di MikroTik, otomatis buatkan sekarang juga!
+        $voucherMode = config('mikrotik.voucher_mode', env('VOUCHER_MODE', 'mikrotik'));
+        if ($voucherMode === 'mikrotik' && $transaction->voucher && in_array($transaction->voucher->status, ['sold', 'used'])) {
+            try {
+                if (!$transaction->voucher->mikrotik_id) {
+                    $profileName = $transaction->plan?->mikrotik_profile ?: $transaction->plan?->name ?: 'default';
+                    $existingUser = $this->mikrotik->getHotspotUserDetailed($transaction->voucher->code);
+                    if (!$existingUser) {
+                        $res = $this->mikrotik->createUser([
+                            'username' => $transaction->voucher->code,
+                            'password' => '',
+                            'profile' => $profileName,
+                            'limit_uptime' => $transaction->plan?->duration ?: '0',
+                            'comment' => "Self-Heal: {$transaction->voucher->code} ({$transaction->customer_phone})"
+                        ]);
+                        if (is_array($res) && isset($res[0]['.id'])) {
+                            $transaction->voucher->update(['mikrotik_id' => $res[0]['.id']]);
+                            \Log::info('Voucher auto-injected to MikroTik on getVoucherByOrder', ['code' => $transaction->voucher->code]);
+                        }
+                    }
+                }
+            } catch (\Throwable $e) {
+                \Log::warning('MikroTik self-heal on getVoucherByOrder failed: ' . $e->getMessage());
+            }
         }
 
         // Response dibuat super lengkap agar Frontend tidak error lagi

@@ -179,7 +179,8 @@ class RewardService
         $mikrotikSuccess = false;
         $errorMessage = null;
 
-        if (env('VOUCHER_MODE', 'radius') === 'mikrotik') {
+        $voucherMode = config('mikrotik.voucher_mode', env('VOUCHER_MODE', 'mikrotik'));
+        if ($voucherMode === 'mikrotik') {
             try {
                 $profileName = $plan->mikrotik_profile ?: $plan->name;
 

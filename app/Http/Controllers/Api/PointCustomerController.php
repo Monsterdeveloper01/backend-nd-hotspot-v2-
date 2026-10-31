@@ -277,7 +277,8 @@ class PointCustomerController extends Controller
                     } while (Voucher::where('code', $voucherCode)->exists());
                     $mikrotikId = null;
 
-                    if (env('VOUCHER_MODE', 'radius') === 'mikrotik') {
+                    $voucherMode = config('mikrotik.voucher_mode', env('VOUCHER_MODE', 'mikrotik'));
+                    if ($voucherMode === 'mikrotik') {
                         $mikrotikResult = $this->mikrotik->createUser([
                             'username' => $voucherCode,
                             'password' => '',
@@ -301,12 +302,13 @@ class PointCustomerController extends Controller
                         'expires_at' => now()->addDays(3),
                     ]);
                 } else {
-                    if (env('VOUCHER_MODE', 'radius') === 'mikrotik') {
+                    $voucherMode = config('mikrotik.voucher_mode', env('VOUCHER_MODE', 'mikrotik'));
+                    if ($voucherMode === 'mikrotik') {
                         if (!$voucher->mikrotik_id) {
                             $this->mikrotik->createUser([
                                 'username' => $voucher->code,
                                 'password' => '',
-                                'profile' => $plan->name,
+                                'profile' => $plan->mikrotik_profile ?: $plan->name,
                                 'limit_uptime' => $plan->duration ?: '0',
                                 'comment' => "ND-POINTS: Exp 3 Hari ({$voucher->code})",
                             ]);
@@ -776,7 +778,8 @@ class PointCustomerController extends Controller
 
         if ($expiredPending->isNotEmpty()) {
             try {
-                if (env('VOUCHER_MODE', 'radius') === 'mikrotik') {
+                $voucherMode = config('mikrotik.voucher_mode', env('VOUCHER_MODE', 'mikrotik'));
+                if ($voucherMode === 'mikrotik') {
                     $this->mikrotik->beginBatch();
                     foreach ($expiredPending as $expV) {
                         // Jangan sentuh voucher QRIS biasa yang belum dipakai!
