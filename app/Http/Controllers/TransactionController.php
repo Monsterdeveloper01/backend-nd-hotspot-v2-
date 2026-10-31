@@ -476,7 +476,9 @@ class TransactionController extends Controller
                 if (!$voucher) {
                     // Generate new voucher 6 karakter (Tanpa I, O, L agar tidak bingung)
                     $chars = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
-                    $voucherCode = substr(str_shuffle(str_repeat($chars, 6)), 0, 6);
+                    do {
+                        $voucherCode = substr(str_shuffle(str_repeat($chars, 6)), 0, 6);
+                    } while (Voucher::where('code', $voucherCode)->exists());
                     
                     $mikrotikId = null;
                     if (env('VOUCHER_MODE', 'radius') === 'mikrotik') {

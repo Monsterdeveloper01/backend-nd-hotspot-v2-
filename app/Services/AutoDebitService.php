@@ -103,7 +103,9 @@ class AutoDebitService
 
                 if (!$voucher) {
                     $chars = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
-                    $voucherCode = substr(str_shuffle(str_repeat($chars, 6)), 0, 6);
+                    do {
+                        $voucherCode = substr(str_shuffle(str_repeat($chars, 6)), 0, 6);
+                    } while (Voucher::where('code', $voucherCode)->exists());
                     $mikrotikId = null;
 
                     if (env('VOUCHER_MODE', 'radius') === 'mikrotik') {
@@ -264,27 +266,34 @@ class AutoDebitService
     {
         $phoneVariants = self::getPhoneVariants($phone);
 
-        $latestVoucher = Voucher::whereIn('customer_phone', $phoneVariants)
+        // Check if ANY voucher owned by this customer is currently active and unexpired
+        return Voucher::whereIn('customer_phone', $phoneVariants)
             ->whereIn('status', ['sold', 'used'])
-            ->latest('id')
-            ->first();
-
-        if (!$latestVoucher) {
-            return false;
-        }
-
-        // If it has expires_at set, check if it's still unexpired in the future
-        if ($latestVoucher->expires_at) {
-            return $latestVoucher->expires_at->isFuture();
-        }
-
-        // If it is 'sold' and not yet used (first login pending),
-        // consider active if created recently (within 7 days)
-        if ($latestVoucher->status === 'sold' && !$latestVoucher->used_at) {
-            return $latestVoucher->created_at && $latestVoucher->created_at->gt(now()->subDays(7));
-        }
-
-        return false;
+            ->where(function ($q) {
+                // 1. Voucher sedang aktif dipakai dan belum habis durasi/paketnya
+                $q->where(function ($q2) {
+                    $q2->where('status', 'used')
+                       ->where(function ($q3) {
+                           $q3->whereNull('expires_at')
+                              ->orWhere('expires_at', '>', now());
+                       });
+                })
+                // 2. Atau voucher siap pakai (belum login pertama) dan masih dalam masa berlaku
+                ->orWhere(function ($q2) {
+                    $q2->where('status', 'sold')
+                       ->where(function ($q3) {
+                           // Voucher poin / reward (memiliki batas kedaluwarsa 3 atau 5 hari)
+                           $q3->whereNotNull('expires_at')
+                              ->where('expires_at', '>', now());
+                       })
+                       ->orWhere(function ($q3) {
+                           // Voucher QRIS biasa (tanpa expires_at sebelum login, toleransi 7 hari)
+                           $q3->whereNull('expires_at')
+                              ->where('created_at', '>', now()->subDays(7));
+                       });
+                });
+            })
+            ->exists();
     }
 
     /**
