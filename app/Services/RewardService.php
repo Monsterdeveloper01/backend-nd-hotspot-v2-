@@ -201,17 +201,20 @@ class RewardService
 
                 Log::info('RewardService: MikroTik API Response', ['result' => $mikrotikResult]);
 
-                if (is_array($mikrotikResult) && isset($mikrotikResult[0]['.id'])) {
-                    $mikrotikId = $mikrotikResult[0]['.id'];
-                    $mikrotikSuccess = true;
-                } elseif (is_array($mikrotikResult) && !isset($mikrotikResult['!trap'])) {
-                    $mikrotikId = $mikrotikResult[0]['.id'] ?? 'created';
+                if (is_array($mikrotikResult) && !isset($mikrotikResult['!trap']) && !isset($mikrotikResult['type'])) {
+                    $mikrotikId = $mikrotikResult[0]['ret'] ?? $mikrotikResult[0]['.id'] ?? 'created';
                     $mikrotikSuccess = true;
                 } else {
-                    $errorMessage = isset($mikrotikResult['!trap'])
-                        ? 'MikroTik Trap: ' . json_encode($mikrotikResult['!trap'])
-                        : 'MikroTik router gagal membuat user hotspot.';
-                    Log::error('RewardService: MikroTik createUser failed', ['response' => $mikrotikResult]);
+                    $msg = strtolower($mikrotikResult['message'] ?? $mikrotikResult['!trap'] ?? '');
+                    if (str_contains($msg, 'already have user') || str_contains($msg, 'already exists')) {
+                        $mikrotikId = 'existing';
+                        $mikrotikSuccess = true;
+                    } else {
+                        $errorMessage = isset($mikrotikResult['!trap'])
+                            ? 'MikroTik Trap: ' . json_encode($mikrotikResult['!trap'])
+                            : 'MikroTik router gagal membuat user hotspot: ' . ($mikrotikResult['message'] ?? 'Unknown error');
+                        Log::error('RewardService: MikroTik createUser failed', ['response' => $mikrotikResult]);
+                    }
                 }
             } catch (\Throwable $e) {
                 $errorMessage = 'MikroTik Exception: ' . $e->getMessage();

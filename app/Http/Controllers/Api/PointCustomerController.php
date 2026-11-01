@@ -287,8 +287,14 @@ class PointCustomerController extends Controller
                             'comment' => "ND-POINTS: Exp 3 Hari ({$voucherCode})",
                         ]);
 
-                        if (is_array($mikrotikResult) && isset($mikrotikResult[0]['.id'])) {
-                            $mikrotikId = $mikrotikResult[0]['.id'];
+                        if (is_array($mikrotikResult)) {
+                            $mikrotikId = $mikrotikResult[0]['ret'] ?? $mikrotikResult[0]['.id'] ?? null;
+                            if (!$mikrotikId) {
+                                $msg = strtolower($mikrotikResult['message'] ?? $mikrotikResult['!trap'] ?? '');
+                                if (str_contains($msg, 'already have user') || str_contains($msg, 'already exists')) {
+                                    $mikrotikId = 'existing';
+                                }
+                            }
                         }
                     }
 

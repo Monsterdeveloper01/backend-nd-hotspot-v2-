@@ -9,7 +9,7 @@ use Carbon\Carbon;
 
 class VoucherHousekeeping extends Command
 {
-    protected $signature = 'voucher:cleanup';
+    protected $signature = 'voucher:cleanup {--days=60 : Batas hari kedaluwarsa voucher QRIS yang belum dipakai (default 60 hari / 2 bulan)}';
     protected $description = 'Clean up expired vouchers and sync usage status with Mikrotik';
 
     protected $mikrotik;
@@ -23,6 +23,10 @@ class VoucherHousekeeping extends Command
     public function handle()
     {
         $this->info("Starting Smart Voucher Housekeeping...");
+
+        $abandonedDays = (int) ($this->option('days') ?: 60);
+        $abandonedCutoff = now()->subDays($abandonedDays);
+        $this->info("Batas kedaluwarsa voucher QRIS hangus: {$abandonedDays} hari (dibeli sebelum {$abandonedCutoff->toDateTimeString()}).");
 
         // Use batch mode: ONE connection for the entire housekeeping run
         if (!$this->mikrotik->beginBatch()) {
@@ -84,16 +88,20 @@ class VoucherHousekeeping extends Command
                 }
 
                 // LOGIKA B: Hapus Dari MikroTik Jika Sudah Kedaluwarsa
-                // Perhatian: Voucher QRIS biasa yang belum terpakai (status sold) TIDAK memiliki batas kedaluwarsa 3 hari.
-                // Batas 3 hari HANYA berlaku untuk voucher yang dibeli menggunakan ND-Points (atau reward).
+                // 1. Voucher poin/reward: kedaluwarsa 3 hari setelah klaim (sesuai expires_at)
+                // 2. Voucher used: kedaluwarsa setelah limit masa aktif paket habis
+                // 3. Voucher QRIS biasa: jika dibeli >= 2 bulan lalu (default 60 hari) dan belum pernah dipakai sama sekali
                 $isPointOrReward = $voucher->isPointVoucher() || $voucher->source === 'reward';
                 $isExpired = false;
 
                 if ($voucher->status === 'sold') {
-                    // Jika belum dipakai, HANYA kedaluwarsa jika berasal dari poin/reward dan expires_at sudah lewat
-                    $isExpired = $isPointOrReward && $voucher->expires_at && $voucher->expires_at < $now;
+                    if ($isPointOrReward) {
+                        $isExpired = $voucher->expires_at && $voucher->expires_at < $now;
+                    } else {
+                        // Voucher QRIS biasa yang berumur >= 2 bulan tanpa pernah digunakan
+                        $isExpired = ($voucher->created_at && $voucher->created_at <= $abandonedCutoff && $uptime === '0s');
+                    }
                 } elseif ($voucher->status === 'used') {
-                    // Jika sudah dipakai, kedaluwarsa saat limit waktu paketnya habis
                     $isExpired = ($voucher->expires_at && $voucher->expires_at < $now);
                 }
 
@@ -109,7 +117,10 @@ class VoucherHousekeeping extends Command
                         // PENTING: JANGAN PERNAH HAPUS DARI DATABASE!
                         // Cukup ubah status di DB menjadi 'expired' untuk rekam jejak
                         if ($voucher->status !== 'expired') {
-                            $voucher->update(['status' => 'expired']);
+                            $voucher->update([
+                                'status' => 'expired',
+                                'expires_at' => $voucher->expires_at ?: $now
+                            ]);
                             if ($voucher->source === 'reward') {
                                 \App\Models\EventReward::where('voucher_id', $voucher->id)
                                     ->whereIn('status', ['issued', 'processing'])
@@ -123,20 +134,33 @@ class VoucherHousekeeping extends Command
                 }
             }
 
-            // 2. Bersihkan voucher poin kedaluwarsa di database yang belum terhapus dari MikroTik
-            // HANYA untuk voucher poin (atau reward) batas 3 hari, atau voucher used yang sudah habis masa aktifnya.
-            // Voucher QRIS biasa yang belum terpakai (sold) TIDAK PERNAH dikadaluarsakan di sini!
+            // 2. Bersihkan voucher kedaluwarsa di database yang belum terhapus dari MikroTik
+            // a) Voucher poin/reward yang sudah lewat expires_at (3 hari)
+            // b) Voucher yang used dan sudah habis limit waktunya
+            // c) Voucher QRIS biasa yang sudah dibeli >= 2 bulan (60 hari) tanpa pernah dipakai
             $dbExpired = Voucher::with(['transaction'])
                 ->whereIn('status', ['sold', 'used'])
-                ->whereNotNull('expires_at')
-                ->where('expires_at', '<', $now)
+                ->where(function ($q) use ($now, $abandonedCutoff) {
+                    $q->where(function ($sq) use ($now) {
+                        $sq->whereNotNull('expires_at')
+                           ->where('expires_at', '<', $now);
+                    })
+                    ->orWhere(function ($sq) use ($abandonedCutoff) {
+                        $sq->where('status', 'sold')
+                           ->whereNull('used_at')
+                           ->where('created_at', '<=', $abandonedCutoff);
+                    });
+                })
                 ->get();
 
             if ($dbExpired->isNotEmpty()) {
                 $this->info("Menemukan {$dbExpired->count()} voucher calon kedaluwarsa di database. Memeriksa...");
                 foreach ($dbExpired as $expV) {
-                    // Voucher QRIS biasa yang belum terpakai TIDAK BOLEH dikadaluarsakan!
-                    if ($expV->status === 'sold' && !$expV->isPointVoucher() && $expV->source !== 'reward') {
+                    $isPointOrReward = $expV->isPointVoucher() || $expV->source === 'reward';
+                    $isQrisAbandoned = ($expV->status === 'sold' && !$isPointOrReward && $expV->created_at <= $abandonedCutoff && !$expV->used_at);
+
+                    // Voucher QRIS biasa yang belum terpakai HANYA dikadaluarsakan jika berumur >= 2 bulan!
+                    if ($expV->status === 'sold' && !$isPointOrReward && !$isQrisAbandoned) {
                         continue;
                     }
 
@@ -147,18 +171,25 @@ class VoucherHousekeeping extends Command
 
                     // PENTING: JANGAN DIHAPUS DI DATABASE!
                     // Cukup update status menjadi 'expired'
-                    $expV->update(['status' => 'expired']);
+                    $expV->update([
+                        'status' => 'expired',
+                        'expires_at' => $expV->expires_at ?: $now
+                    ]);
                     if ($expV->source === 'reward') {
                         \App\Models\EventReward::where('voucher_id', $expV->id)
                             ->whereIn('status', ['issued', 'processing'])
                             ->update(['status' => 'expired']);
                     }
-                    $this->info("User MikroTik {$expV->code} dihapus & status DB diupdate ke 'expired'. Record database tetap tersimpan.");
+                    $reason = $isQrisAbandoned ? "Voucher QRIS tidak dipakai > {$abandonedDays} hari" : "Masa aktif habis";
+                    $this->info("User MikroTik {$expV->code} dihapus ({$reason}) & status DB diupdate ke 'expired'.");
                 }
             }
 
-            // 3. AUTO-HEAL: Pastikan semua voucher berstatus 'sold' yang aktif di database sudah ter-inject ke MikroTik!
-            $soldVouchers = Voucher::where('status', 'sold')->with('plan')->get();
+            // 3. AUTO-HEAL: Pastikan semua voucher berstatus 'sold' yang masih VALID (< 60 hari) ter-inject ke MikroTik!
+            $soldVouchers = Voucher::where('status', 'sold')
+                ->where('created_at', '>', $abandonedCutoff)
+                ->with('plan')
+                ->get();
             $mikrotikUsernames = collect($allMikrotikUsers)->pluck('name')->flip();
             $healedCount = 0;
 

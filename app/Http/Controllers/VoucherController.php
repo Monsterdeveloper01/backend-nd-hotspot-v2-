@@ -225,12 +225,18 @@ class VoucherController extends Controller
                     $mikrotikResult = $this->mikrotik->createUser([
                         'username' => $code,
                         'password' => '', 
-                        'profile' => $plan->name,
+                        'profile' => $plan->mikrotik_profile ?: $plan->name,
                         'limit_uptime' => $plan->duration ?: '0'
                     ]);
-                    $mikrotikId = $mikrotikResult[0]['.id'] ?? null;
+                    $mikrotikId = $mikrotikResult[0]['ret'] ?? $mikrotikResult[0]['.id'] ?? null;
+                    if (!$mikrotikId && is_array($mikrotikResult)) {
+                        $msg = strtolower($mikrotikResult['message'] ?? $mikrotikResult['!trap'] ?? '');
+                        if (str_contains($msg, 'already have user') || str_contains($msg, 'already exists')) {
+                            $mikrotikId = 'existing';
+                        }
+                    }
                     
-                    if (!$mikrotikResult) {
+                    if (!$mikrotikResult || (isset($mikrotikResult['!trap']) && $mikrotikId !== 'existing')) {
                         continue; // Skip if mikrotik creation fails in local mode
                     }
                 }
@@ -376,5 +382,56 @@ class VoucherController extends Controller
         ]);
 
         return response()->json($result);
+    }
+
+    /**
+     * Clean up QRIS vouchers purchased >= 2 months (or custom days) ago that were never used.
+     */
+    public function cleanupAbandoned(Request $request)
+    {
+        $days = (int) $request->input('days', 60);
+        if ($days < 1) $days = 60;
+
+        $cutoff = now()->subDays($days);
+        $now = now();
+
+        $abandoned = Voucher::where('status', 'sold')
+            ->whereNull('used_at')
+            ->where('created_at', '<=', $cutoff)
+            ->get();
+
+        if ($abandoned->isEmpty()) {
+            return response()->json([
+                'success' => true,
+                'message' => "Tidak ada voucher QRIS hangus (> {$days} hari tidak digunakan).",
+                'cleaned_count' => 0
+            ]);
+        }
+
+        $cleanedCount = 0;
+        $this->mikrotik->beginBatch();
+        try {
+            foreach ($abandoned as $v) {
+                try {
+                    $this->mikrotik->removeAndCleanUser($v->code);
+                } catch (\Throwable $e) {
+                    \Log::warning("Gagal hapus user {$v->code} saat cleanup abandoned: " . $e->getMessage());
+                }
+
+                $v->update([
+                    'status' => 'expired',
+                    'expires_at' => $now
+                ]);
+                $cleanedCount++;
+            }
+        } finally {
+            $this->mikrotik->endBatch();
+        }
+
+        return response()->json([
+            'success' => true,
+            'message' => "Berhasil membersihkan {$cleanedCount} voucher QRIS yang tidak pernah dipakai (> {$days} hari) dari MikroTik.",
+            'cleaned_count' => $cleanedCount
+        ]);
     }
 }

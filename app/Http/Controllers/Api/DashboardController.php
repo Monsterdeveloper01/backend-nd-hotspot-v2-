@@ -111,13 +111,68 @@ class DashboardController extends Controller
             ];
         }
 
-        // 2. Chart Data (Daily revenue this month)
-        $chartData = DB::table('transactions')
+        // 2. Chart Data: Full Calendar Month from Day 01 to End of Month (with comparison to last month)
+        $now = Carbon::now();
+        $startOfMonth = $now->copy()->startOfMonth();
+        $endOfMonth = $now->copy()->endOfMonth();
+        $daysInMonth = $now->daysInMonth;
+
+        $startOfLastMonth = $now->copy()->subMonthNoOverflow()->startOfMonth();
+        $endOfLastMonth = $now->copy()->subMonthNoOverflow()->endOfMonth();
+        $daysInLastMonth = $startOfLastMonth->daysInMonth;
+
+        // Query transactions this month grouped by date
+        $rawThisMonth = DB::table('transactions')
             ->select(DB::raw('DATE(created_at) as date'), DB::raw('SUM(amount) as total'))
             ->where('status', 'success')
-            ->where('created_at', '>=', $startOfMonth)
+            ->whereBetween('created_at', [$startOfMonth, $endOfMonth])
             ->groupBy('date')
-            ->get();
+            ->pluck('total', 'date');
+
+        // Query transactions last month grouped by date
+        $rawLastMonth = DB::table('transactions')
+            ->select(DB::raw('DATE(created_at) as date'), DB::raw('SUM(amount) as total'))
+            ->where('status', 'success')
+            ->whereBetween('created_at', [$startOfLastMonth, $endOfLastMonth])
+            ->groupBy('date')
+            ->pluck('total', 'date');
+
+        $chartData = [];
+        $lastMonthTotalSum = 0;
+        for ($day = 1; $day <= $daysInMonth; $day++) {
+            $dateStr = $startOfMonth->copy()->day($day)->format('Y-m-d');
+            $dayLabel = sprintf('%02d', $day);
+            $totalThisMonth = (float) ($rawThisMonth[$dateStr] ?? 0);
+
+            $lastMonthTotal = 0;
+            if ($day <= $daysInLastMonth) {
+                $lastMonthDateStr = $startOfLastMonth->copy()->day($day)->format('Y-m-d');
+                $lastMonthTotal = (float) ($rawLastMonth[$lastMonthDateStr] ?? 0);
+            }
+            $lastMonthTotalSum += $lastMonthTotal;
+
+            $chartData[] = [
+                'day' => $dayLabel,
+                'date' => $dateStr,
+                'total' => $totalThisMonth,
+                'last_month_total' => $lastMonthTotal,
+            ];
+        }
+
+        $monthMeta = [
+            'month_name' => $now->translatedFormat('F Y'),
+            'month_short' => $now->translatedFormat('M Y'),
+            'last_month_name' => $startOfLastMonth->translatedFormat('F Y'),
+            'last_month_short' => $startOfLastMonth->translatedFormat('M Y'),
+            'start_date' => $startOfMonth->format('d/m/Y'),
+            'end_date' => $endOfMonth->format('d/m/Y'),
+            'start_day' => '01',
+            'end_day' => sprintf('%02d', $daysInMonth),
+            'days_in_month' => $daysInMonth,
+            'current_day' => (int) $now->format('d'),
+            'this_month_total' => (float) $monthlyRevenue,
+            'last_month_total' => (float) $lastMonthTotalSum,
+        ];
 
         // Voucher Chart (Last 30 Days)
         $last30Days = Carbon::today()->subDays(29);
@@ -267,6 +322,7 @@ class DashboardController extends Controller
                 'auto_debit_users' => $autoDebitUsers,
             ],
             'chart' => $chartData,
+            'month_meta' => $monthMeta,
             'voucher_chart' => $voucherChartData,
             'bill_chart' => $billChartData,
             'qris_statis_chart' => $qrisStatisChartData,
