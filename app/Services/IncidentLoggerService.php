@@ -123,9 +123,10 @@ class IncidentLoggerService
      */
     public static function logSystemException(Throwable $e, ?string $context = null): ?SystemIncident
     {
-        $route = request()?->path() ?? 'CLI / Background';
-        $method = request()?->method() ?? 'JOB';
-        $ip = request()?->ip() ?? 'CLI';
+        $isCli = app()->runningInConsole();
+        $route = $isCli ? 'CLI / Background' : (request()?->path() ?: '/');
+        $method = $isCli ? 'ARTISAN' : (request()?->method() ?: 'GET');
+        $ip = $isCli ? '127.0.0.1' : (request()?->ip() ?: 'CLI');
 
         return self::report(
             category: 'system',
