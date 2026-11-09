@@ -629,6 +629,11 @@ class PointCustomerController extends Controller
      */
     public function toggleAutoDebit(Request $request)
     {
+        return response()->json([
+            'success' => false,
+            'message' => 'Fitur ND Auto-Voucher sedang dinonaktifkan sementara. Saat ini Anda dapat menukarkan poin secara langsung di menu Tukar Voucher.'
+        ], 403);
+
         $validator = Validator::make($request->all(), [
             'phone' => 'required|string|min:8|max:25',
             'pin' => 'required|string|regex:/^[0-9]{4,6}$/',

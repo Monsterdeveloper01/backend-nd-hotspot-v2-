@@ -11,7 +11,7 @@ use Illuminate\Support\Facades\Schedule;
 Schedule::command('app:send-daily-sales-report')->dailyAt('07:00');
 Schedule::command('billing:check')->dailyAt('07:00');
 Schedule::command('voucher:cleanup')->everyFiveMinutes();
-Schedule::command('points:autodebit')->everyTenMinutes();
+// Schedule::command('points:autodebit')->everyTenMinutes(); // Dinonaktifkan sementara (hanya penukaran voucher)
 
 // Radius Log & Session Management
 Schedule::call(function () {
