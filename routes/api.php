@@ -109,6 +109,8 @@ Route::middleware('auth:sanctum')->group(function () {
 
     // Admin: Analytics
     Route::get('/analytics/peak-hours', [\App\Http\Controllers\Api\AnalyticsController::class, 'getPeakHours']);
+    Route::get('/admin/deep-analytics', [\App\Http\Controllers\Api\DeepAnalyticsController::class, 'index']);
+    Route::post('/admin/deep-analytics/refresh-ai', [\App\Http\Controllers\Api\DeepAnalyticsController::class, 'refreshAi']);
 
     // Admin: System Config
     Route::post('/maintenance/toggle', [\App\Http\Controllers\Api\SystemConfigController::class, 'toggleMaintenance']);
