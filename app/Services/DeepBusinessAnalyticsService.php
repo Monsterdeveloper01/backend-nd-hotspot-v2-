@@ -529,21 +529,30 @@ class DeepBusinessAnalyticsService
      */
     private function callGeminiApi(string $apiKey, array $context): ?array
     {
-        $prompt = "Anda adalah Chief Business Analyst senior untuk bisnis ISP & Hotspot MikroTik (ND-Hotspot). Analisis data metrik operasional berikut dan berikan 5 insight bisnis tajam, actionable, dan bernilai uang. Hindari teori umum, berikan angka dan langkah konkret:\n\n" 
+        $prompt = "Anda adalah asisten konsultan bisnis WiFi & Hotspot (ND-Hotspot) yang berbicara langsung ke pemilik usaha (bos warkop / pengusaha RT-RW Net).
+Analisis data berikut dengan BAHASA INDONESIA YANG SANGAT SANTAI, RAMAH, DAN MUDAH DIMENGERTI ORANG AWAM:
+DILARANG menggunakan istilah teknis/asing seperti 'churn, cohort, run-rate, cannibalization, bandwidth shaping, QoS, LTV, AOV'.
+Gantilah dengan bahasa manusia sehari-hari, contohnya:
+- Churn -> 'Pelanggan yang kabur / gak balik beli lagi'
+- Peak hours -> 'Jam paling rame warkop / wifi penuh'
+- Cash cow / Most profitable -> 'Paket tambang uang utama'
+- Revenue forecast -> 'Tebak-tebakan duit yang bakal masuk bulan depan'
+
+Data metrik bisnis:\n" 
             . json_encode($context, JSON_PRETTY_PRINT)
             . "\n\nFormat output WAJIB berupa JSON murni dengan struktur berikut:
             {
-                \"ai_headline\": \"Headline singkat kondisi bisnis\",
+                \"ai_headline\": \"Judul kondisi usaha (contoh: Usaha WiFi Kamu Lagi Rame & Mantap!)\",
                 \"health_score\": 85,
-                \"health_status\": \"Sehat & Bertumbuh\",
-                \"executive_summary\": \"Paragraf analisis eksekutif\",
+                \"health_status\": \"Usaha Lagi Sehat & Ramai\",
+                \"executive_summary\": \"Paragraf ngobrol santai menyapa si Bos tentang kondisi bisnisnya bulan ini\",
                 \"action_items\": [
                     {
-                        \"title\": \"Judul Taktik\",
-                        \"category\": \"Pricing / Churn / Traffic / Reseller\",
-                        \"priority\": \"Tinggi / Menengah / Rendah\",
-                        \"impact\": \"Potensi Tambahan Omset Rp X / Penurunan Churn\",
-                        \"action\": \"Langkah implementasi teknis dan bisnis\"
+                        \"title\": \"Judul Tips Praktis\",
+                        \"category\": \"Tips Harga / Ajak Pelanggan Balik / Atur WiFi Biar Gak Lemot / Target Duit\",
+                        \"priority\": \"Penting Banget / Lumayan Penting / Santai\",
+                        \"impact\": \"Kira-kira bisa nambah untung Rp X / bikin pelanggan betah\",
+                        \"action\": \"Langkah gampang yang bisa langsung dipraktekkan hari ini\"
                     }
                 ]
             }";
@@ -566,7 +575,7 @@ class DeepBusinessAnalyticsService
             $jsonText = $response->json('candidates.0.content.parts.0.text');
             $decoded = json_decode($jsonText, true);
             if (is_array($decoded) && isset($decoded['executive_summary'])) {
-                $decoded['provider'] = 'Google Gemini 1.5 Flash (Live AI)';
+                $decoded['provider'] = 'Google Gemini 1.5 Flash (AI Cerdas)';
                 return $decoded;
             }
         }
@@ -575,7 +584,7 @@ class DeepBusinessAnalyticsService
     }
 
     /**
-     * Expert Rule-based AI Engine (Deterministic Intelligence)
+     * Expert Rule-based AI Engine (Deterministic Intelligence in plain human language)
      */
     private function generateHeuristicAiInsights(array $ctx): array
     {
@@ -591,6 +600,9 @@ class DeepBusinessAnalyticsService
         $topPlan = $matrix['most_profitable']['name'] ?? 'Paket Utama';
         $popPlan = $matrix['most_popular']['name'] ?? 'Paket Terlaris';
         $moderateForecast = number_format($forecast['forecast_next_month']['moderate'] ?? 0, 0, ',', '.');
+        $totalVouchers = number_format($summary['vouchers_issued'] ?? 0, 0, ',', '.');
+        $totalOmset = number_format($summary['gross_revenue'] ?? 0, 0, ',', '.');
+        $churnCount = $retention['churn_count'] ?? 0;
 
         // Health Score Calculation
         $score = 75;
@@ -600,72 +612,74 @@ class DeepBusinessAnalyticsService
         elseif ($churn > 40) $score -= 15;
         $score = max(40, min(98, $score));
 
-        $status = $score >= 80 ? 'Sangat Sehat & Menguntungkan' : ($score >= 65 ? 'Stabil dengan Ruang Optimasi' : 'Perlu Intervensi Churn');
+        $status = $score >= 80 
+            ? 'Usaha Lagi Sehat & Rame Banget!' 
+            : ($score >= 65 ? 'Usaha Cukup Stabil (Bisa Digenjot Lagi)' : 'Perlu Diperhatikan (Banyak Pelanggan Kabur)');
 
         $actions = [];
 
-        // 1. Plan Cannibalization & Pricing
+        // 1. Saran Paket & Harga
         if ($topPlan !== $popPlan) {
             $actions[] = [
-                'title' => "Optimasi Margin: {$topPlan} vs {$popPlan}",
-                'category' => 'Pricing Strategy',
-                'priority' => 'Tinggi',
-                'impact' => 'Peningkatan omset 8% - 14%',
-                'action' => "Paket '{$popPlan}' paling banyak dibeli tetapi paket '{$topPlan}' adalah penghasil omset terbesar. Pertimbangkan bundling atau beri bonus poin lebih besar saat pelanggan memilih '{$topPlan}' untuk mengalihkan kebiasaan beli paket murah harian.",
+                'title' => "Bikin Orang Beralih ke {$topPlan}",
+                'category' => 'Tips Harga & Menu',
+                'priority' => 'Penting Banget',
+                'impact' => 'Bisa naikin omset sekitar 10% - 15%',
+                'action' => "Orang paling sering beli '{$popPlan}' karena murah, tapi uang terbesar kamu sebenarnya masuk dari '{$topPlan}'. Coba kasih bonus koin poin ekstra atau buat promo khusus biar orang yang terbiasa beli harian mau coba beli paket '{$topPlan}'.",
             ];
         } else {
             $actions[] = [
-                'title' => "Pertahankan Momentum Paket Utama ({$topPlan})",
-                'category' => 'Pricing Strategy',
-                'priority' => 'Menengah',
-                'impact' => 'Stabilitas arus kas harian',
-                'action' => "Paket '{$topPlan}' menjadi raja volume dan profit sekaligus. Jangan naikkan harga, namun tambahkan opsi kuota loyalty untuk meningkatkan kepuasan pelanggan tetap.",
+                'title' => "Pertahankan Paket Juara ({$topPlan})",
+                'category' => 'Tips Harga & Menu',
+                'priority' => 'Lumayan Penting',
+                'impact' => 'Uang masuk harian tetap lancar',
+                'action' => "Paket '{$topPlan}' adalah juara umum di tempat kamu, paling laris dan paling banyak nyumbang duit. Harganya jangan diubah-ubah dulu ya, cukup pastikan koneksinya selalu lancar jaya.",
             ];
         }
 
-        // 2. Churn Prevention
-        if ($churn > 25) {
+        // 2. Cegah Pelanggan Kabur
+        if ($churn > 20) {
             $actions[] = [
-                'title' => 'Pencegahan Churn Pelanggan (>25% Tidak Kembali)',
-                'category' => 'Churn Defense',
-                'priority' => 'Kritis',
-                'impact' => 'Selamatkan estimasi Rp ' . number_format($summary['avg_spend_per_user'] * 15, 0, ',', '.') . ' per bulan',
-                'action' => "Tercatat {$retention['churn_count']} pelanggan tidak membeli lagi dalam 30 hari terakhir. Gunakan broadcast WhatsApp ramah dengan menawarkan voucher diskon atau reward koin 250 Pts pada hari ke-5 setelah masa aktif voucher mereka habis.",
+                'title' => "Ada {$churnCount} Orang Langganan Gak Kelihatan Lagi",
+                'category' => 'Ajak Pelanggan Balik',
+                'priority' => 'Penting Banget',
+                'impact' => 'Bisa selamatkan sekitar Rp ' . number_format($summary['avg_spend_per_user'] * 10, 0, ',', '.') . ' uang jajan bulanan',
+                'action' => "Tercatat ada {$churnCount} pelanggan yang bulan lalu aktif beli, tapi 2 minggu terakhir ini gak beli voucher sama sekali. Coba sapa mereka via WhatsApp: 'Halo kak, kangen internetan kencang di ND-Hotspot? Khusus hari ini ada bonus voucher buat kamu lho!'.",
             ];
         } else {
             $actions[] = [
-                'title' => 'Retensi Pelanggan Sangat Baik (Repeat Rate Kuat)',
-                'category' => 'Retention Booster',
-                'priority' => 'Rendah',
-                'impact' => 'Tingkatkan Lifetime Value (LTV)',
-                'action' => "Loyalitas pelanggan di angka {$retention['retention_rate_pct']}%. Aktifkan program referral 'Ajak Teman Dapet Poin' untuk menambah penetrasi pengguna baru di sekitar lokasi pemancar WiFi.",
+                'title' => 'Pelanggan Kamu Setia Banget (Jarang Pindah ke Lain Hati)',
+                'category' => 'Bikin Tambah Betah',
+                'priority' => 'Santai',
+                'impact' => 'Pelanggan makin betah dan ngajak teman',
+                'action' => "Tingkat kesetiaan pelanggan kamu sangat bagus ({$retention['retention_rate_pct']}% orang selalu beli lagi). Kamu bisa ajak mereka ikut event loyalty atau promo koin biar mereka makin sering ngajak teman-temannya nongkrong.",
             ];
         }
 
-        // 3. Peak Hour Traffic & Bandwidth
+        // 3. Jam Paling Rame & WiFi Lemot
         $actions[] = [
-            'title' => "Manajemen Trafik di Jam Padat ({$peakRange})",
-            'category' => 'Traffic & QoS',
-            'priority' => 'Tinggi',
-            'impact' => 'Cegah komplain lag & lindungi rating WiFi',
-            'action' => "Aktivitas hotspot melonjak tajam pada rentang jam {$peakRange}. Pastikan limit profile MikroTik mengaktifkan Queue Tree dengan prioritas ICMP/Gaming dan batasi download background agar streaming tidak mencekik latency pengguna game.",
+            'title' => "Waspada Jam Ramai: {$peakRange}",
+            'category' => 'Atur WiFi Biar Gak Lemot',
+            'priority' => 'Penting Banget',
+            'impact' => 'Cegah pelanggan komplain WiFi lelet',
+            'action' => "Di antara jam {$peakRange}, hotspot kamu lagi penuh-penuhnya orang internetan. Hindari download film/game gede sendiri di jam ini, dan pastikan fitur Gaming Area tetap lancar agar bocah game online gak ngambek.",
         ];
 
-        // 4. Revenue Growth Target
+        // 4. Tebakan Duit Masuk Bulan Depan
         $actions[] = [
-            'title' => 'Proyeksi Bulan Depan Rp ' . $moderateForecast,
-            'category' => 'Revenue Projection',
-            'priority' => 'Menengah',
-            'impact' => 'Mencapai skenario optimis Rp ' . number_format($forecast['forecast_next_month']['optimistic'] ?? 0, 0, ',', '.'),
-            'action' => "Berdasarkan run-rate harian Rp " . number_format($forecast['daily_run_rate'] ?? 0, 0, ',', '.') . ", omset bulan depan diproyeksikan menembus Rp {$moderateForecast}. Untuk mengejar skenario optimis, buat promo 'Flash Sale Akhir Pekan' di hari Sabtu dan Minggu.",
+            'title' => 'Bulan Depan Kira-kira Masuk Rp ' . $moderateForecast,
+            'category' => 'Target Duit',
+            'priority' => 'Lumayan Penting',
+            'impact' => 'Bisa tembus Rp ' . number_format($forecast['forecast_next_month']['optimistic'] ?? 0, 0, ',', '.') . ' kalau digenjot',
+            'action' => "Rata-rata setiap hari masuk duit sekitar Rp " . number_format($forecast['daily_run_rate'] ?? 0, 0, ',', '.') . ". Kalau pola ini bertahan, bulan depan kamu bisa pegang omset Rp {$moderateForecast}. Mau lebih banyak? Bikin promo khusus tiap malam minggu!",
         ];
 
         return [
-            'provider' => 'ND-Hotspot Heuristic Business AI Engine',
-            'ai_headline' => "Kinerja Bisnis: {$status} (Skor: {$score}/100)",
+            'provider' => 'ND-Hotspot Asisten Cerdas Bisnis',
+            'ai_headline' => "Kondisi Usaha: {$status} (Nilai: {$score}/100)",
             'health_score' => $score,
             'health_status' => $status,
-            'executive_summary' => "Dalam {$ctx['summary']['vouchers_issued']} voucher yang diterbitkan, performa didorong kuat oleh {$topPlan}. Jam tersibuk terkonsentrasi di {$peakRange}. Dengan menjaga tingkat churn di bawah {$churn}% dan memaksimalkan channel digital, pendapatan bulan depan memiliki potensi kuat mencapai Rp {$moderateForecast}.",
+            'executive_summary' => "Halo Bos! Dalam sebulan terakhir, usaha hotspot kamu sudah berhasil menjual {$totalVouchers} voucher dengan total uang masuk Rp {$totalOmset}. Penghasilan terbesar kamu disumbang oleh paket '{$topPlan}'. Jam paling rame itu antara jam {$peakRange}. Nah, ada sekitar {$churnCount} orang yang belakangan ini gak kelihatan beli lagi. Yuk simak tips gampang di bawah ini biar uang masuk makin tebal!",
             'action_items' => $actions,
         ];
     }
