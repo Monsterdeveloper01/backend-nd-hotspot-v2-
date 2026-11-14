@@ -118,15 +118,25 @@ class DeepBusinessAnalyticsService
             $peakHourCandidates[$h] = $count + ($sessions * 2);
         }
 
-        // Identify Top Peak Hours
-        arsort($peakHourCandidates);
-        $topHours = array_slice(array_keys($peakHourCandidates), 0, 3);
-        sort($topHours);
-        $peakRangeLabel = !empty($topHours) 
-            ? sprintf('%02d:00 - %02d:00 WIB', min($topHours), (max($topHours) + 1) % 24)
-            : '19:00 - 22:00 WIB';
+        // Identify Top Peak Hours based strictly on real activity
+        $totalActivity = array_sum($peakHourCandidates);
+        $topHours = [];
+        $peakRangeLabel = 'Belum ada data aktivitas';
 
-        // Traffic by Location / NAS Client
+        if ($totalActivity > 0) {
+            $activeCandidates = array_filter($peakHourCandidates, fn($val) => $val > 0);
+            arsort($activeCandidates);
+            $topHours = array_slice(array_keys($activeCandidates), 0, 3);
+            sort($topHours);
+
+            if (!empty($topHours)) {
+                $minH = min($topHours);
+                $maxH = (max($topHours) + 1) % 24;
+                $peakRangeLabel = sprintf('%02d:00 - %02d:00 WIB', $minH, $maxH);
+            }
+        }
+
+        // Traffic by Location / NAS Client (100% real database records)
         $locations = [];
         $nasClients = RadiusClient::all()->keyBy('ip');
 
@@ -145,27 +155,24 @@ class DeepBusinessAnalyticsService
                 $name = $client ? $client->name : ($nas->nas_ip ?: 'Router Utama');
                 $locations[] = [
                     'name' => $name,
-                    'ip' => $nas->nas_ip,
+                    'ip' => $nas->nas_ip ?: '-',
                     'sessions' => (int)$nas->session_count,
                     'traffic_gb' => round((int)$nas->total_bytes / (1024 * 1024 * 1024), 2),
                 ];
             }
+        } elseif ($nasClients->isNotEmpty()) {
+            // Real registered Mikrotik/RADIUS routers awaiting connection logs
+            foreach ($nasClients as $client) {
+                $locations[] = [
+                    'name' => $client->name,
+                    'ip' => $client->ip,
+                    'sessions' => 0,
+                    'traffic_gb' => 0.0,
+                ];
+            }
         } else {
-            // Fallback based on Plan category if radius sessions not populated
-            $regulerTx = Transaction::where('status', 'success')
-                ->whereHas('plan', fn($q) => $q->where('is_gaming', false))
-                ->whereBetween('created_at', [$startDate, $endDate])
-                ->count();
-
-            $gamingTx = Transaction::where('status', 'success')
-                ->whereHas('plan', fn($q) => $q->where('is_gaming', true))
-                ->whereBetween('created_at', [$startDate, $endDate])
-                ->count();
-
-            $locations = [
-                ['name' => 'Hotspot Publik (Area Utama)', 'ip' => '10.80.80.1', 'sessions' => $regulerTx, 'traffic_gb' => round($regulerTx * 1.5, 1)],
-                ['name' => 'Gaming Area (Low Latency)', 'ip' => '10.90.90.1', 'sessions' => $gamingTx, 'traffic_gb' => round($gamingTx * 3.2, 1)],
-            ];
+            // Absolutely no registered routers or sessions
+            $locations = [];
         }
 
         return [
@@ -368,27 +375,45 @@ class DeepBusinessAnalyticsService
             ->get();
 
         $dailyAmounts = $dailyData->pluck('daily_revenue')->map(fn($v) => (float)$v)->toArray();
-        $activeDays = count($dailyAmounts) ?: 1;
+        $activeDays = count($dailyAmounts);
         $total30d = array_sum($dailyAmounts);
+
+        if ($total30d <= 0 || $activeDays === 0) {
+            return [
+                'current_30d_revenue' => 0.0,
+                'daily_run_rate' => 0.0,
+                'growth_velocity_pct' => 0.0,
+                'forecast_next_month' => [
+                    'conservative' => 0.0,
+                    'moderate' => 0.0,
+                    'optimistic' => 0.0,
+                ],
+                'confidence_score' => 'Menunggu Transaksi Perdana',
+                'key_growth_lever' => 'Sistem sedang memantau transaksi. Estimasi omset otomatis aktif begitu transaksi voucher pertama mulai masuk.',
+            ];
+        }
+
         $dailyRunRate = $total30d / $activeDays;
 
         // Velocity: Compare last 14 days vs previous 14 days
         $last14 = array_slice($dailyAmounts, -14);
         $prior14 = array_slice($dailyAmounts, -28, 14);
 
-        $sumRecent = array_sum($last14) ?: 1;
-        $sumPrior = array_sum($prior14) ?: 1;
-        $growthVelocityPct = round((($sumRecent - $sumPrior) / $sumPrior) * 100, 1);
+        $sumRecent = array_sum($last14);
+        $sumPrior = array_sum($prior14);
+        $growthVelocityPct = $sumPrior > 0 
+            ? round((($sumRecent - $sumPrior) / $sumPrior) * 100, 1) 
+            : 0.0;
 
         // 3 Projection Scenarios for Next 30 Days:
         // 1. Conservative (Pessimistic: 85% run rate)
         $conservative = round($dailyRunRate * 30 * 0.85);
 
-        // 2. Moderate (Baseline with half velocity momentum)
+        // 2. Moderate (Baseline with velocity momentum)
         $growthFactor = 1 + ($growthVelocityPct / 200);
         $moderate = round($dailyRunRate * 30 * max(0.9, min(1.35, $growthFactor)));
 
-        // 3. Optimistic (Growth Target with full velocity + churn recovery)
+        // 3. Optimistic (Growth Target with full velocity)
         $optimistic = round($moderate * 1.18);
 
         return [
@@ -403,7 +428,7 @@ class DeepBusinessAnalyticsService
             'confidence_score' => $activeDays >= 20 ? 'Tinggi (Data 30 Hari Lengkap)' : 'Menengah (Data Terbatas)',
             'key_growth_lever' => $growthVelocityPct >= 0 
                 ? 'Momentum penjualan positif. Optimalkan voucher berdurasi panjang untuk mengunci omset.'
-                : 'Pertumbuhan agak melambat. Terapkan diskon jam sepi atau promo loyalti untuk memulihkan run-rate.',
+                : 'Pertumbuhan agak melambat. Terapkan promo warkop atau event loyalti untuk memulihkan pemasukan harian.',
         ];
     }
 
@@ -532,26 +557,23 @@ class DeepBusinessAnalyticsService
         $prompt = "Anda adalah asisten konsultan bisnis WiFi & Hotspot (ND-Hotspot) yang berbicara langsung ke pemilik usaha (bos warkop / pengusaha RT-RW Net).
 Analisis data berikut dengan BAHASA INDONESIA YANG SANGAT SANTAI, RAMAH, DAN MUDAH DIMENGERTI ORANG AWAM:
 DILARANG menggunakan istilah teknis/asing seperti 'churn, cohort, run-rate, cannibalization, bandwidth shaping, QoS, LTV, AOV'.
-Gantilah dengan bahasa manusia sehari-hari, contohnya:
-- Churn -> 'Pelanggan yang kabur / gak balik beli lagi'
-- Peak hours -> 'Jam paling rame warkop / wifi penuh'
-- Cash cow / Most profitable -> 'Paket tambang uang utama'
-- Revenue forecast -> 'Tebak-tebakan duit yang bakal masuk bulan depan'
+DILARANG MENGARANG DATA ATAU MENGGUNAKAN DATA HARDCODED/DUMMY. Seluruh angka, persentase, jam sibuk, dan nama paket WAJIB 100% diambil dari data JSON yang diberikan di bawah ini.
+Jika data transaksi masih 0 atau kosong, sampaikan dengan jujur dan ramah bahwa sistem sedang bersiap menunggu transaksi perdana, lalu berikan tips persiapan dan promosi awal.
 
-Data metrik bisnis:\n" 
+Data metrik bisnis riil:\n" 
             . json_encode($context, JSON_PRETTY_PRINT)
             . "\n\nFormat output WAJIB berupa JSON murni dengan struktur berikut:
             {
-                \"ai_headline\": \"Judul kondisi usaha (contoh: Usaha WiFi Kamu Lagi Rame & Mantap!)\",
+                \"ai_headline\": \"Judul kondisi usaha riil\",
                 \"health_score\": 85,
                 \"health_status\": \"Usaha Lagi Sehat & Ramai\",
-                \"executive_summary\": \"Paragraf ngobrol santai menyapa si Bos tentang kondisi bisnisnya bulan ini\",
+                \"executive_summary\": \"Paragraf ngobrol santai menyapa si Bos tentang kondisi bisnisnya bulan ini berdasarkan data riil\",
                 \"action_items\": [
                     {
                         \"title\": \"Judul Tips Praktis\",
-                        \"category\": \"Tips Harga / Ajak Pelanggan Balik / Atur WiFi Biar Gak Lemot / Target Duit\",
+                        \"category\": \"Tips Harga / Ajak Pelanggan Balik / Atur WiFi Biar Gak Lemot / Target Duit / Persiapan\",
                         \"priority\": \"Penting Banget / Lumayan Penting / Santai\",
-                        \"impact\": \"Kira-kira bisa nambah untung Rp X / bikin pelanggan betah\",
+                        \"impact\": \"Kira-kira dampaknya sesuai data\",
                         \"action\": \"Langkah gampang yang bisa langsung dipraktekkan hari ini\"
                     }
                 ]
@@ -594,17 +616,47 @@ Data metrik bisnis:\n"
         $retention = $ctx['retention'] ?? [];
         $forecast = $ctx['forecasting'] ?? [];
 
+        $vouchersCount = (int)($summary['vouchers_issued'] ?? 0);
+        $grossRevenue = (float)($summary['gross_revenue'] ?? 0.0);
+
+        // Honest handling when zero transactions exist in selected period (Zero Hardcoded Data)
+        if ($vouchersCount === 0 && $grossRevenue === 0.0) {
+            return [
+                'provider' => 'ND-Hotspot AI Intelligence (Data Riil)',
+                'ai_headline' => 'Sistem Standby: Menunggu Pembelian Voucher Pertama',
+                'health_score' => 70,
+                'health_status' => 'Sistem Normal (Belum Ada Transaksi)',
+                'executive_summary' => 'Halo Bos! Sistem ND-Hotspot sudah aktif memantau jaringan hotspot kamu, namun belum ada transaksi voucher yang tercatat pada periode ini. Begitu pelanggan mulai membeli voucher atau login WiFi, AI akan langsung membedah jam paling ramai, paket paling laris, dan potensi omset kamu secara otomatis dari data riil.',
+                'action_items' => [
+                    [
+                        'title' => 'Cek Halaman Portal Login Hotspot',
+                        'category' => 'Persiapan Sistem',
+                        'priority' => 'Penting Banget',
+                        'impact' => 'Memastikan pelanggan bisa langsung login lancar',
+                        'action' => 'Pastikan router Mikrotik kamu sudah tersambung dan portal login warkop muncul otomatis begitu pelanggan menghubungkan HP ke WiFi ND-Hotspot.',
+                    ],
+                    [
+                        'title' => 'Pasang Banner / Stiker QRIS di Meja Warkop',
+                        'category' => 'Ajak Pelanggan',
+                        'priority' => 'Lumayan Penting',
+                        'impact' => 'Mendatangkan pembeli voucher perdana',
+                        'action' => 'Cetak kode QR atau tempel pengumuman di meja dan kasir agar pengunjung tahu mereka bisa langsung beli paket internet sendiri lewat HP tanpa harus antre tanya password.',
+                    ],
+                ],
+            ];
+        }
+
         $churn = $retention['churn_rate_pct'] ?? 0;
         $growth = $summary['growth_pct'] ?? 0;
-        $peakRange = $peak['peak_range_label'] ?? '19:00 - 22:00 WIB';
-        $topPlan = $matrix['most_profitable']['name'] ?? 'Paket Utama';
-        $popPlan = $matrix['most_popular']['name'] ?? 'Paket Terlaris';
+        $peakRange = $peak['peak_range_label'] ?? null;
+        $topPlan = $matrix['most_profitable']['name'] ?? null;
+        $popPlan = $matrix['most_popular']['name'] ?? null;
         $moderateForecast = number_format($forecast['forecast_next_month']['moderate'] ?? 0, 0, ',', '.');
-        $totalVouchers = number_format($summary['vouchers_issued'] ?? 0, 0, ',', '.');
-        $totalOmset = number_format($summary['gross_revenue'] ?? 0, 0, ',', '.');
-        $churnCount = $retention['churn_count'] ?? 0;
+        $totalVouchers = number_format($vouchersCount, 0, ',', '.');
+        $totalOmset = number_format($grossRevenue, 0, ',', '.');
+        $churnCount = (int)($retention['churn_count'] ?? 0);
 
-        // Health Score Calculation
+        // Health Score Calculation based strictly on metrics
         $score = 75;
         if ($growth > 10) $score += 10;
         elseif ($growth < -10) $score -= 10;
@@ -618,68 +670,92 @@ Data metrik bisnis:\n"
 
         $actions = [];
 
-        // 1. Saran Paket & Harga
-        if ($topPlan !== $popPlan) {
-            $actions[] = [
-                'title' => "Bikin Orang Beralih ke {$topPlan}",
-                'category' => 'Tips Harga & Menu',
-                'priority' => 'Penting Banget',
-                'impact' => 'Bisa naikin omset sekitar 10% - 15%',
-                'action' => "Orang paling sering beli '{$popPlan}' karena murah, tapi uang terbesar kamu sebenarnya masuk dari '{$topPlan}'. Coba kasih bonus koin poin ekstra atau buat promo khusus biar orang yang terbiasa beli harian mau coba beli paket '{$topPlan}'.",
-            ];
-        } else {
-            $actions[] = [
-                'title' => "Pertahankan Paket Juara ({$topPlan})",
-                'category' => 'Tips Harga & Menu',
-                'priority' => 'Lumayan Penting',
-                'impact' => 'Uang masuk harian tetap lancar',
-                'action' => "Paket '{$topPlan}' adalah juara umum di tempat kamu, paling laris dan paling banyak nyumbang duit. Harganya jangan diubah-ubah dulu ya, cukup pastikan koneksinya selalu lancar jaya.",
-            ];
+        // 1. Saran Paket & Harga (Strictly Dynamic)
+        if ($topPlan && $popPlan) {
+            if ($topPlan !== $popPlan) {
+                $actions[] = [
+                    'title' => "Bikin Orang Beralih ke {$topPlan}",
+                    'category' => 'Tips Harga & Menu',
+                    'priority' => 'Penting Banget',
+                    'impact' => 'Bisa naikin omset sekitar 10% - 15%',
+                    'action' => "Orang paling sering beli '{$popPlan}' karena terjangkau, tapi uang terbesar kamu sebenarnya masuk dari '{$topPlan}'. Coba kasih bonus koin poin ekstra atau buat promo khusus biar orang yang terbiasa beli harian mau coba beli paket '{$topPlan}'.",
+                ];
+            } else {
+                $actions[] = [
+                    'title' => "Pertahankan Paket Juara ({$topPlan})",
+                    'category' => 'Tips Harga & Menu',
+                    'priority' => 'Lumayan Penting',
+                    'impact' => 'Uang masuk harian tetap lancar',
+                    'action' => "Paket '{$topPlan}' adalah juara umum di tempat kamu, paling laris dan paling banyak nyumbang duit. Harganya jangan diubah-ubah dulu ya, cukup pastikan koneksinya selalu lancar jaya.",
+                ];
+            }
         }
 
         // 2. Cegah Pelanggan Kabur
-        if ($churn > 20) {
+        if ($churnCount > 0 && $churn > 20) {
+            $avgSpend = (int)($summary['avg_spend_per_user'] ?? 0);
+            $potentialLoss = number_format($churnCount * $avgSpend, 0, ',', '.');
             $actions[] = [
                 'title' => "Ada {$churnCount} Orang Langganan Gak Kelihatan Lagi",
                 'category' => 'Ajak Pelanggan Balik',
                 'priority' => 'Penting Banget',
-                'impact' => 'Bisa selamatkan sekitar Rp ' . number_format($summary['avg_spend_per_user'] * 10, 0, ',', '.') . ' uang jajan bulanan',
-                'action' => "Tercatat ada {$churnCount} pelanggan yang bulan lalu aktif beli, tapi 2 minggu terakhir ini gak beli voucher sama sekali. Coba sapa mereka via WhatsApp: 'Halo kak, kangen internetan kencang di ND-Hotspot? Khusus hari ini ada bonus voucher buat kamu lho!'.",
+                'impact' => 'Bisa selamatkan sekitar Rp ' . $potentialLoss . ' uang bulanan',
+                'action' => "Tercatat ada {$churnCount} pelanggan yang bulan lalu aktif beli, tapi belakangan ini belum beli voucher lagi. Coba sapa mereka via WhatsApp: 'Halo kak, kangen internetan kencang di ND-Hotspot? Khusus hari ini ada bonus voucher buat kamu lho!'.",
             ];
         } else {
+            $retentionRate = $retention['retention_rate_pct'] ?? 100;
             $actions[] = [
                 'title' => 'Pelanggan Kamu Setia Banget (Jarang Pindah ke Lain Hati)',
                 'category' => 'Bikin Tambah Betah',
                 'priority' => 'Santai',
                 'impact' => 'Pelanggan makin betah dan ngajak teman',
-                'action' => "Tingkat kesetiaan pelanggan kamu sangat bagus ({$retention['retention_rate_pct']}% orang selalu beli lagi). Kamu bisa ajak mereka ikut event loyalty atau promo koin biar mereka makin sering ngajak teman-temannya nongkrong.",
+                'action' => "Tingkat kesetiaan pelanggan kamu sangat bagus ({$retentionRate}% orang selalu beli lagi). Kamu bisa ajak mereka ikut event loyalty atau promo koin biar mereka makin sering ngajak teman-temannya nongkrong.",
             ];
         }
 
         // 3. Jam Paling Rame & WiFi Lemot
-        $actions[] = [
-            'title' => "Waspada Jam Ramai: {$peakRange}",
-            'category' => 'Atur WiFi Biar Gak Lemot',
-            'priority' => 'Penting Banget',
-            'impact' => 'Cegah pelanggan komplain WiFi lelet',
-            'action' => "Di antara jam {$peakRange}, hotspot kamu lagi penuh-penuhnya orang internetan. Hindari download film/game gede sendiri di jam ini, dan pastikan fitur Gaming Area tetap lancar agar bocah game online gak ngambek.",
-        ];
+        if ($peakRange && $peakRange !== 'Belum ada data aktivitas') {
+            $actions[] = [
+                'title' => "Waspada Jam Ramai: {$peakRange}",
+                'category' => 'Atur WiFi Biar Gak Lemot',
+                'priority' => 'Penting Banget',
+                'impact' => 'Cegah pelanggan komplain WiFi lelet',
+                'action' => "Di antara jam {$peakRange}, hotspot kamu lagi penuh-penuhnya orang internetan. Hindari download file berukuran besar di jam ini, dan pastikan fitur Gaming Area tetap lancar agar pengunjung game online betah.",
+            ];
+        }
 
         // 4. Tebakan Duit Masuk Bulan Depan
-        $actions[] = [
-            'title' => 'Bulan Depan Kira-kira Masuk Rp ' . $moderateForecast,
-            'category' => 'Target Duit',
-            'priority' => 'Lumayan Penting',
-            'impact' => 'Bisa tembus Rp ' . number_format($forecast['forecast_next_month']['optimistic'] ?? 0, 0, ',', '.') . ' kalau digenjot',
-            'action' => "Rata-rata setiap hari masuk duit sekitar Rp " . number_format($forecast['daily_run_rate'] ?? 0, 0, ',', '.') . ". Kalau pola ini bertahan, bulan depan kamu bisa pegang omset Rp {$moderateForecast}. Mau lebih banyak? Bikin promo khusus tiap malam minggu!",
-        ];
+        if (($forecast['daily_run_rate'] ?? 0) > 0) {
+            $actions[] = [
+                'title' => 'Bulan Depan Kira-kira Masuk Rp ' . $moderateForecast,
+                'category' => 'Target Duit',
+                'priority' => 'Lumayan Penting',
+                'impact' => 'Bisa tembus Rp ' . number_format($forecast['forecast_next_month']['optimistic'] ?? 0, 0, ',', '.') . ' kalau digenjot',
+                'action' => "Rata-rata setiap hari masuk duit sekitar Rp " . number_format($forecast['daily_run_rate'] ?? 0, 0, ',', '.') . ". Kalau pola ini bertahan, bulan depan kamu bisa pegang omset Rp {$moderateForecast}. Mau lebih banyak? Bikin promo khusus tiap malam minggu!",
+            ];
+        }
+
+        // Build dynamic executive summary narrative
+        $summaryParts = ["Halo Bos! Dalam sebulan terakhir, usaha hotspot kamu sudah berhasil menjual {$totalVouchers} voucher dengan total uang masuk Rp {$totalOmset}."];
+        if ($topPlan) {
+            $summaryParts[] = "Penghasilan terbesar kamu disumbang oleh paket '{$topPlan}'.";
+        }
+        if ($peakRange && $peakRange !== 'Belum ada data aktivitas') {
+            $summaryParts[] = "Jam paling ramai terpantau di {$peakRange}.";
+        }
+        if ($churnCount > 0) {
+            $summaryParts[] = "Tercatat ada {$churnCount} orang yang belakangan ini belum kelihatan beli lagi.";
+        } else {
+            $summaryParts[] = "Pelanggan aktif kamu terpantau setia.";
+        }
+        $summaryParts[] = "Yuk simak tips praktis di bawah ini biar uang masuk makin tebal!";
 
         return [
-            'provider' => 'ND-Hotspot Asisten Cerdas Bisnis',
+            'provider' => 'ND-Hotspot Asisten Cerdas Bisnis (Data Riil)',
             'ai_headline' => "Kondisi Usaha: {$status} (Nilai: {$score}/100)",
             'health_score' => $score,
             'health_status' => $status,
-            'executive_summary' => "Halo Bos! Dalam sebulan terakhir, usaha hotspot kamu sudah berhasil menjual {$totalVouchers} voucher dengan total uang masuk Rp {$totalOmset}. Penghasilan terbesar kamu disumbang oleh paket '{$topPlan}'. Jam paling rame itu antara jam {$peakRange}. Nah, ada sekitar {$churnCount} orang yang belakangan ini gak kelihatan beli lagi. Yuk simak tips gampang di bawah ini biar uang masuk makin tebal!",
+            'executive_summary' => implode(' ', $summaryParts),
             'action_items' => $actions,
         ];
     }
