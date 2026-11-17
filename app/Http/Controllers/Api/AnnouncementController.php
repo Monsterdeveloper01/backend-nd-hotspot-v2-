@@ -10,12 +10,33 @@ use Illuminate\Http\Request;
 class AnnouncementController extends Controller
 {
     /**
+     * Helper to safely parse datetime into Asia/Jakarta (or app default timezone) string
+     */
+    protected function parseDateTime($value)
+    {
+        if (empty($value)) {
+            return null;
+        }
+
+        $tz = config('app.timezone', 'Asia/Jakarta');
+
+        try {
+            if (is_string($value) && (str_ends_with($value, 'Z') || preg_match('/[+-]\d{2}:\d{2}$/', $value))) {
+                return Carbon::parse($value)->setTimezone($tz)->format('Y-m-d H:i:s');
+            }
+            return Carbon::parse(str_replace('T', ' ', $value), $tz)->format('Y-m-d H:i:s');
+        } catch (\Exception $e) {
+            return null;
+        }
+    }
+
+    /**
      * Get active announcements for public portal (Home / Landing Page)
      * Automatically purges announcements that have passed their expiration / end time.
      */
     public function publicActive()
     {
-        // 1. Otomatis hapus / bersihkan data yang sudah lewat masa berlaku
+        // 1. Otomatis bersihkan pengumuman yang sudah kedaluwarsa
         Announcement::purgeExpired();
 
         // 2. Ambil pengumuman yang masih aktif
@@ -52,9 +73,9 @@ class AnnouncementController extends Controller
                     'title' => $item->title,
                     'type' => $item->type,
                     'message' => $item->message,
-                    'start_time' => $item->start_time ? $item->start_time->toIso8601String() : null,
-                    'end_time' => $item->end_time ? $item->end_time->toIso8601String() : null,
-                    'expires_at' => $item->expires_at ? $item->expires_at->toIso8601String() : null,
+                    'start_time' => $item->start_time ? $item->start_time->format('Y-m-d H:i:s') : null,
+                    'end_time' => $item->end_time ? $item->end_time->format('Y-m-d H:i:s') : null,
+                    'expires_at' => $item->expires_at ? $item->expires_at->format('Y-m-d H:i:s') : null,
                     'is_ongoing' => $isOngoing,
                     'is_upcoming' => $isUpcoming,
                     'time_range_formatted' => $timeRange,
@@ -76,7 +97,21 @@ class AnnouncementController extends Controller
         // Bersihkan yang sudah kedaluwarsa
         $purgedCount = Announcement::purgeExpired();
 
-        $announcements = Announcement::orderBy('id', 'desc')->get();
+        $announcements = Announcement::orderBy('id', 'desc')->get()->map(function ($item) {
+            return [
+                'id' => $item->id,
+                'title' => $item->title,
+                'type' => $item->type,
+                'message' => $item->message,
+                'start_time' => $item->start_time ? $item->start_time->format('Y-m-d H:i:s') : null,
+                'end_time' => $item->end_time ? $item->end_time->format('Y-m-d H:i:s') : null,
+                'expires_at' => $item->expires_at ? $item->expires_at->format('Y-m-d H:i:s') : null,
+                'is_active' => (bool)$item->is_active,
+                'dismissible' => (bool)$item->dismissible,
+                'created_at' => $item->created_at ? $item->created_at->format('Y-m-d H:i:s') : null,
+                'updated_at' => $item->updated_at ? $item->updated_at->format('Y-m-d H:i:s') : null,
+            ];
+        });
 
         return response()->json([
             'success' => true,
@@ -94,12 +129,16 @@ class AnnouncementController extends Controller
             'title' => 'required|string|max:255',
             'type' => 'required|in:maintenance,warning,info,promo',
             'message' => 'required|string',
-            'start_time' => 'nullable|date',
-            'end_time' => 'nullable|date|after_or_equal:start_time',
-            'expires_at' => 'nullable|date',
+            'start_time' => 'nullable',
+            'end_time' => 'nullable',
+            'expires_at' => 'nullable',
             'is_active' => 'boolean',
             'dismissible' => 'boolean',
         ]);
+
+        $validated['start_time'] = $this->parseDateTime($request->input('start_time'));
+        $validated['end_time'] = $this->parseDateTime($request->input('end_time'));
+        $validated['expires_at'] = $this->parseDateTime($request->input('expires_at'));
 
         // Jika expires_at tidak diisi tetapi end_time ada, otomatis gunakan end_time sebagai batas kedaluwarsa
         if (empty($validated['expires_at']) && !empty($validated['end_time'])) {
@@ -126,12 +165,16 @@ class AnnouncementController extends Controller
             'title' => 'required|string|max:255',
             'type' => 'required|in:maintenance,warning,info,promo',
             'message' => 'required|string',
-            'start_time' => 'nullable|date',
-            'end_time' => 'nullable|date',
-            'expires_at' => 'nullable|date',
+            'start_time' => 'nullable',
+            'end_time' => 'nullable',
+            'expires_at' => 'nullable',
             'is_active' => 'boolean',
             'dismissible' => 'boolean',
         ]);
+
+        $validated['start_time'] = $this->parseDateTime($request->input('start_time'));
+        $validated['end_time'] = $this->parseDateTime($request->input('end_time'));
+        $validated['expires_at'] = $this->parseDateTime($request->input('expires_at'));
 
         if (empty($validated['expires_at']) && !empty($validated['end_time'])) {
             $validated['expires_at'] = $validated['end_time'];
