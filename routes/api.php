@@ -112,6 +112,13 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/admin/deep-analytics', [\App\Http\Controllers\Api\DeepAnalyticsController::class, 'index']);
     Route::post('/admin/deep-analytics/refresh-ai', [\App\Http\Controllers\Api\DeepAnalyticsController::class, 'refreshAi']);
 
+    // Admin: Informasi & Pengumuman / Maintenance Notice
+    Route::get('/admin/announcements', [\App\Http\Controllers\Api\AnnouncementController::class, 'index']);
+    Route::post('/admin/announcements', [\App\Http\Controllers\Api\AnnouncementController::class, 'store']);
+    Route::put('/admin/announcements/{id}', [\App\Http\Controllers\Api\AnnouncementController::class, 'update']);
+    Route::post('/admin/announcements/{id}/toggle', [\App\Http\Controllers\Api\AnnouncementController::class, 'toggle']);
+    Route::delete('/admin/announcements/{id}', [\App\Http\Controllers\Api\AnnouncementController::class, 'destroy']);
+
     // Admin: System Config
     Route::post('/maintenance/toggle', [\App\Http\Controllers\Api\SystemConfigController::class, 'toggleMaintenance']);
     Route::post('/maintenance/points/toggle', [\App\Http\Controllers\Api\SystemConfigController::class, 'togglePointMaintenance']);
@@ -156,6 +163,7 @@ Route::middleware('auth:sanctum')->group(function () {
 
 // Public: System Config & Tracking
 Route::get('/maintenance/status', [\App\Http\Controllers\Api\SystemConfigController::class, 'getStatus']);
+Route::get('/announcements/active', [\App\Http\Controllers\Api\AnnouncementController::class, 'publicActive']);
 Route::post('/maintenance/bypass', [\App\Http\Controllers\Api\SystemConfigController::class, 'verifyBypass'])->middleware('throttle:10,1');
 Route::post('/maintenance/points/bypass', [\App\Http\Controllers\Api\SystemConfigController::class, 'verifyPointBypass'])->middleware('throttle:10,1');
 Route::post('/log-visit', [\App\Http\Controllers\Api\AnalyticsController::class, 'logVisit']);
