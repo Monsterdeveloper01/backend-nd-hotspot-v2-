@@ -24,89 +24,12 @@ class WhatsAppBotController extends Controller
      */
     public function checkStatus(Request $request)
     {
-        $secret = env('WA_GATEWAY_SECRET');
-        if ($secret && !hash_equals((string) $secret, (string) $request->header('X-Gateway-Secret', ''))) {
-            return response()->json(['found' => false, 'message' => 'Unauthorized Gateway'], 401);
-        }
-
-        $query = trim($request->input('q', ''));
-
-        if (strlen($query) < 3) {
-            return response()->json(['found' => false, 'message' => 'Query minimal 3 karakter'], 400);
-        }
-
-        // 1. Try to find by voucher code
-        $voucher = Voucher::with('plan')
-            ->where('code', $query)
-            ->orWhere('code', strtoupper($query))
-            ->first();
-
-        if ($voucher) {
-            $mikrotikData = null;
-            $isOnline = false;
-
-            try {
-                $mikrotikData = $this->mikrotik->getHotspotUserDetailed($voucher->code);
-                $isOnline = $mikrotikData ? ($mikrotikData['is_online'] ?? false) : false;
-            } catch (\Exception $e) {
-                \Log::warning("WA Bot: Mikrotik check failed for voucher {$voucher->code}: " . $e->getMessage());
-            }
-
-            return response()->json([
-                'found' => true,
-                'type' => 'voucher',
-                'voucher' => [
-                    'code' => $voucher->code,
-                    'plan_name' => $voucher->plan->name ?? 'Unknown',
-                    'status' => $voucher->status,
-                    'price' => $voucher->price,
-                    'customer_phone' => $voucher->customer_phone,
-                    'mac_address' => $voucher->mac_address,
-                    'is_online' => $isOnline,
-                    'uptime' => $mikrotikData['uptime'] ?? null,
-                    'limit_uptime' => $mikrotikData['limit_uptime'] ?? null,
-                    'profile' => $mikrotikData['profile'] ?? null,
-                    'used_at' => $voucher->used_at,
-                    'expires_at' => $voucher->expires_at,
-                ],
-            ]);
-        }
-
-        // 2. Try to find by customer name or phone
-        $customer = Customer::where('name', 'LIKE', $query)
-            ->orWhere('name', 'LIKE', "%{$query}%")
-            ->orWhere('whatsapp', 'LIKE', "%{$query}%")
-            ->first();
-
-        if ($customer) {
-            $mikrotikStatus = null;
-
-            try {
-                $mikrotikData = $this->mikrotik->getHotspotUserDetailed($customer->name);
-                if ($mikrotikData) {
-                    $mikrotikStatus = $mikrotikData['is_online'] ? 'online' : 'offline';
-                }
-            } catch (\Exception $e) {
-                \Log::warning("WA Bot: Mikrotik check failed for customer {$customer->name}: " . $e->getMessage());
-            }
-
-            return response()->json([
-                'found' => true,
-                'type' => 'customer',
-                'customer' => [
-                    'name' => $customer->name,
-                    'whatsapp' => $customer->whatsapp,
-                    'billing_amount' => $customer->billing_amount,
-                    'due_date' => $customer->due_date ? $customer->due_date->format('d/m/Y') : null,
-                    'status_bayar' => $customer->status_bayar,
-                    'is_isolated' => $customer->is_isolated,
-                    'mikrotik_status' => $mikrotikStatus,
-                ],
-            ]);
-        }
-
-        // 3. Not found
-        return response()->json(['found' => false, 'message' => 'Data tidak ditemukan'], 404);
+        // WA Bot dimatikan secara penuh sesuai permintaan admin (tidak ada cek voucher atau info pelanggan via bot)
+        return response()->json([
+            'found' => false,
+            'disabled' => true,
+            'message' => 'Layanan WA Bot dinonaktifkan.'
+        ], 403);
     }
 
     /**
@@ -115,25 +38,11 @@ class WhatsAppBotController extends Controller
      */
     public function storeComplaint(Request $request)
     {
-        $secret = env('WA_GATEWAY_SECRET');
-        if ($secret && !hash_equals((string) $secret, (string) $request->header('X-Gateway-Secret', ''))) {
-            return response()->json(['message' => 'Unauthorized Gateway'], 401);
-        }
-
-        $request->validate([
-            'phone_number' => 'required|string',
-            'raw_message' => 'required|string',
-            'ai_summary' => 'nullable|string',
-        ]);
-
-        $complaint = Complaint::create([
-            'phone_number' => $request->phone_number,
-            'raw_message' => $request->raw_message,
-            'ai_summary' => $request->ai_summary ?? $request->raw_message,
-            'status' => 'new',
-        ]);
-
-        return response()->json(['success' => true, 'complaint' => $complaint]);
+        return response()->json([
+            'success' => false,
+            'disabled' => true,
+            'message' => 'Layanan WA Bot dinonaktifkan.'
+        ], 403);
     }
 
     /**

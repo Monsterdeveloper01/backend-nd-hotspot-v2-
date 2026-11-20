@@ -30,6 +30,14 @@ class PointCustomerController extends Controller
     public function __construct(MikrotikService $mikrotik)
     {
         $this->mikrotik = $mikrotik;
+
+        if (!\App\Services\PointService::isSystemEnabled()) {
+            abort(response()->json([
+                'success' => false,
+                'status' => 'disabled',
+                'message' => 'Layanan ND-Points sedang dinonaktifkan sementara.'
+            ], 503));
+        }
     }
 
     /**

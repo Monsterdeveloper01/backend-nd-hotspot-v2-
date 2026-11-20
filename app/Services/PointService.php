@@ -30,12 +30,12 @@ class PointService
     {
         try {
             $config = AppConfig::where('key', 'point_system_enabled')->value('value');
-            if ($config !== null && in_array(strtolower($config), ['0', 'false', 'off', 'no'], true)) {
-                return false;
+            if ($config !== null && in_array(strtolower($config), ['1', 'true', 'on', 'yes'], true)) {
+                return true;
             }
-            return true;
+            return false; // FITUR POINT DINONAKTIFKAN PENUH SECARA DEFAULT
         } catch (\Throwable $e) {
-            return true;
+            return false;
         }
     }
 
