@@ -7,6 +7,7 @@ use App\Models\Customer;
 use App\Models\Transaction;
 use App\Services\MikrotikService;
 use App\Services\WhatsAppService;
+use App\Services\ApiEncryptionService;
 use Illuminate\Http\Request;
 use Carbon\Carbon;
 
@@ -259,51 +260,65 @@ class CustomerController extends Controller
 
         // Proteksi 1: Minimal 3 karakter untuk mencegah wildcard scraping satu huruf
         if (strlen($query) < 3) {
-            return response()->json([
+            return ApiEncryptionService::respond([
+                'found' => false,
                 'message' => 'Kata kunci pencarian minimal 3 karakter.'
-            ], 422);
+            ], 200);
         }
 
         // Proteksi 2: Rate limiting per IP (maksimal 20 pencarian per menit)
         $throttleKey = 'search-bill:' . $request->ip();
         if (\Illuminate\Support\Facades\RateLimiter::tooManyAttempts($throttleKey, 20)) {
             $seconds = \Illuminate\Support\Facades\RateLimiter::availableIn($throttleKey);
-            return response()->json([
+            return ApiEncryptionService::respond([
+                'found' => false,
                 'message' => "Terlalu banyak permintaan pencarian. Silakan tunggu {$seconds} detik."
-            ], 429);
+            ], 200);
         }
         \Illuminate\Support\Facades\RateLimiter::hit($throttleKey, 60);
 
-        // Cari pelanggan (ekstrak cocok nama atau nomor WA)
-        $customer = Customer::where('name', 'LIKE', $query)
-            ->orWhere('whatsapp', 'LIKE', $query)
-            ->first();
-
-        if (!$customer) {
-            $customer = Customer::where('name', 'LIKE', "%{$query}%")
-                ->orWhere('whatsapp', 'LIKE', "%{$query}%")
+        try {
+            // Cari pelanggan (ekstrak cocok nama atau nomor WA)
+            $customer = Customer::where('name', 'LIKE', $query)
+                ->orWhere('whatsapp', 'LIKE', $query)
                 ->first();
-        }
 
-        if (!$customer) {
-            return response()->json(['message' => 'Tagihan tidak ditemukan'], 404);
-        }
+            if (!$customer) {
+                $customer = Customer::where('name', 'LIKE', "%{$query}%")
+                    ->orWhere('whatsapp', 'LIKE', "%{$query}%")
+                    ->first();
+            }
 
-        // Proteksi 3: Masking nomor WhatsApp agar privasi pelanggan terlindungi dari scraping publik
-        $maskedWa = $customer->whatsapp;
-        if (strlen($maskedWa) >= 8) {
-            $maskedWa = substr($maskedWa, 0, 4) . '****' . substr($maskedWa, -3);
-        }
+            if (!$customer) {
+                return ApiEncryptionService::respond([
+                    'found' => false,
+                    'message' => 'Tagihan tidak ditemukan'
+                ], 200);
+            }
 
-        return response()->json([
-            'id' => $customer->id,
-            'name' => $customer->name,
-            'whatsapp' => $maskedWa,
-            'billing_amount' => $customer->billing_amount,
-            'due_date' => $customer->due_date,
-            'status_bayar' => $customer->status_bayar,
-            'is_isolated' => $customer->is_isolated,
-        ]);
+            // Proteksi 3: Masking nomor WhatsApp agar privasi pelanggan terlindungi dari scraping publik
+            $maskedWa = $customer->whatsapp;
+            if (strlen($maskedWa) >= 8) {
+                $maskedWa = substr($maskedWa, 0, 4) . '****' . substr($maskedWa, -3);
+            }
+
+            return ApiEncryptionService::respond([
+                'found' => true,
+                'id' => $customer->id,
+                'name' => $customer->name,
+                'whatsapp' => $maskedWa,
+                'billing_amount' => $customer->billing_amount,
+                'due_date' => $customer->due_date,
+                'status_bayar' => $customer->status_bayar,
+                'is_isolated' => $customer->is_isolated,
+            ], 200);
+        } catch (\Throwable $e) {
+            \Log::error("Search bill error: " . $e->getMessage());
+            return ApiEncryptionService::respond([
+                'found' => false,
+                'message' => 'Terjadi kesalahan sistem saat mencari tagihan.'
+            ], 200);
+        }
     }
 
     public function getSnapToken($id)

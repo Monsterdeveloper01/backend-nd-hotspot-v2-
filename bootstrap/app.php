@@ -13,6 +13,7 @@ return Application::configure(basePath: dirname(__DIR__))
     )
     ->withMiddleware(function (Middleware $middleware): void {
         $middleware->appendToGroup('api', \App\Http\Middleware\CheckMaintenanceMode::class);
+        $middleware->appendToGroup('api', \App\Http\Middleware\ProtectDirectApiAccess::class);
         
         // Jangan redirect unauthenticated guest ke route web 'login', tapi lempar AuthenticationException (401 JSON)
         $middleware->redirectGuestsTo(fn () => null);

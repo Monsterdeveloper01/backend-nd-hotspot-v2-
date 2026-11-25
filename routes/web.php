@@ -3,7 +3,7 @@
 use Illuminate\Support\Facades\Route;
 
 Route::get('/', function () {
-    return view('welcome');
+    return redirect()->to(env('FRONTEND_URL', 'https://nd-hostpot.net'));
 });
 
 Route::get('/login', function () {

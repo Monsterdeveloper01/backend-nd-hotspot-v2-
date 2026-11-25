@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Models\Voucher;
 use App\Models\VoucherPlan;
 use App\Services\MikrotikService;
+use App\Services\ApiEncryptionService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
 use Carbon\Carbon;
@@ -21,14 +22,22 @@ class VoucherController extends Controller
     public function checkVoucher(Request $request)
     {
         $code = strtoupper(trim($request->query('code')));
-        if (!$code) return response()->json(['message' => 'Kode voucher harus diisi'], 400);
+        if (!$code) {
+            return ApiEncryptionService::respond([
+                'found' => false,
+                'message' => 'Kode voucher harus diisi'
+            ], 200);
+        }
 
         try {
             // Hanya cari di Database Lokal
             $voucher = Voucher::with('plan')->where('code', $code)->first();
 
             if (!$voucher) {
-                return response()->json(['message' => 'Voucher tidak ditemukan. Pastikan kode yang Anda masukkan sudah benar.'], 404);
+                return ApiEncryptionService::respond([
+                    'found' => false,
+                    'message' => 'Voucher tidak ditemukan. Pastikan kode yang Anda masukkan sudah benar.'
+                ], 200);
             }
 
             // Auto-update status expired jika sudah lewat waktu
@@ -62,7 +71,8 @@ class VoucherController extends Controller
 
             $plan = $voucher->plan;
 
-            return response()->json([
+            return ApiEncryptionService::respond([
+                'found' => true,
                 'code' => $voucher->code,
                 'status' => $voucher->status,
                 'price' => $voucher->price,
@@ -79,10 +89,13 @@ class VoucherController extends Controller
                 'time_percentage' => $timePercentage,
                 'mac_address' => $voucher->mac_address,
                 'created_at' => $voucher->created_at ? $voucher->created_at->format('d M Y, H:i') : null,
-            ]);
-        } catch (\Exception $e) {
+            ], 200);
+        } catch (\Throwable $e) {
             \Log::error("Check voucher error: " . $e->getMessage());
-            return response()->json(['message' => 'Terjadi kesalahan saat memeriksa voucher. Silakan coba lagi.'], 500);
+            return ApiEncryptionService::respond([
+                'found' => false,
+                'message' => 'Terjadi kesalahan saat memeriksa voucher. Silakan coba lagi.'
+            ], 200);
         }
     }
 
@@ -154,7 +167,7 @@ class VoucherController extends Controller
             });
 
             return response()->json($vouchers);
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             \Log::error("Error in activeVouchers: " . $e->getMessage());
             return response()->json([
                 'success' => false, 
@@ -279,7 +292,7 @@ class VoucherController extends Controller
         // Safe delete from Mikrotik and Local DB
         try {
             $this->mikrotik->deleteUser($voucher->code);
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             \Log::warning("Mikrotik delete user failed for {$voucher->code}: " . $e->getMessage());
         }
 
@@ -350,7 +363,7 @@ class VoucherController extends Controller
             foreach ($expired as $v) {
                 try {
                     $this->mikrotik->removeAndCleanUser($v->code);
-                } catch (\Exception $e) {
+                } catch (\Throwable $e) {
                     \Log::error("Cleanup failed for {$v->code}: " . $e->getMessage());
                 }
 

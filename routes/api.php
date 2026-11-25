@@ -12,7 +12,9 @@ use App\Http\Controllers\Api\PointAdminController;
 use App\Http\Controllers\Api\PointCustomerController;
 use Illuminate\Support\Facades\Route;
 
-Route::get('/', function() { return view('welcome'); });
+Route::get('/', function() {
+    return redirect()->to(env('FRONTEND_URL', 'https://nd-hostpot.net'));
+});
 Route::get('/login', function() {
     return response()->json(['message' => 'Unauthenticated.'], 401);
 })->name('login');
@@ -190,8 +192,8 @@ Route::get('/test', function () {
 
 // Fallback: Jika akses route API yang tidak ada atau akses lewat browser sembarangan
 Route::any('{any}', function (Illuminate\Http\Request $request) {
-    if ($request->expectsJson()) {
+    if ($request->expectsJson() || $request->ajax()) {
         return response()->json(['message' => 'Endpoint not found'], 404);
     }
-    return view('welcome');
+    return redirect()->to(env('FRONTEND_URL', 'https://nd-hostpot.net'));
 })->where('any', '.*');
